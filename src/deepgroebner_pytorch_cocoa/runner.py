@@ -77,7 +77,6 @@ def build_training_cli_args(cfg: TrainConfig) -> list[str]:
 
 
 def build_training_command(cfg: TrainConfig) -> list[str]:
-    load_training_module()
     return [sys.executable, "-m", TRAINING_MODULE, *build_training_cli_args(cfg)]
 
 
