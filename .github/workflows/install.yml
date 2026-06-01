@@ -1,0 +1,123 @@
+name: Install Verification
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install-custom-cocoalib-path:
+    name: Install with custom CoCoALib path (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git libgmp-dev make
+
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install gmp
+
+      - name: Build CoCoALib on Linux
+        if: runner.os == 'Linux'
+        run: |
+          git clone --depth 1 https://github.com/cocoa-official/CoCoALib.git /tmp/CoCoALib
+          cd /tmp/CoCoALib
+          ./configure --only-cocoalib
+          make library
+
+      - name: Build CoCoALib on macOS
+        if: runner.os == 'macOS'
+        run: |
+          git clone --depth 1 https://github.com/cocoa-official/CoCoALib.git /tmp/CoCoALib
+          cd /tmp/CoCoALib
+          ./configure --only-cocoalib --with-libgmp="$(brew --prefix gmp)/lib/libgmp.dylib"
+          make library
+
+      - name: Install Python package against custom CoCoALib path
+        env:
+          COCOA_INCLUDE_DIR: /tmp/CoCoALib/include
+          COCOA_LIB_DIR: /tmp/CoCoALib/lib
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Run installation smoke tests
+        run: |
+          python -c "import deepgroebner_pytorch_cocoa; import deepgroebner_pytorch_cocoa.wrapped as wrapped; print({'package': deepgroebner_pytorch_cocoa.__name__, 'wrapped': wrapped.__name__})"
+          python -c "import numpy as np; import gymnasium as gym; import deepgroebner_pytorch_cocoa; env=gym.make('BuchbergerExponents-v1'); obs, info = env.reset(seed=123); valid=np.flatnonzero(obs['P_mask']); action=int(valid[0]); obs2, reward, terminated, truncated, info2 = env.step(action); print({'env':'BuchbergerExponents-v1','reward':float(reward),'terminated':bool(terminated),'truncated':bool(truncated)})"
+          python -c "import gymnasium as gym; import deepgroebner_pytorch_cocoa; env=gym.make('BuchbergerExponentsNoPQ-v1'); obs, info = env.reset(seed=123); obs2, reward, terminated, truncated, info2 = env.step(0); print({'env':'BuchbergerExponentsNoPQ-v1','reward':float(reward),'terminated':bool(terminated),'truncated':bool(truncated)})"
+          deepgroebner-pytorch-cocoa-train --dry-run True --track False --total-timesteps 5000
+          pytest tests/test_runner.py
+
+  install-standard-system-location:
+    name: Install with standard /usr/local CoCoALib layout (Python 3.12)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git libgmp-dev make rsync
+
+      - name: Build CoCoALib
+        run: |
+          git clone --depth 1 https://github.com/cocoa-official/CoCoALib.git /tmp/CoCoALib
+          cd /tmp/CoCoALib
+          ./configure --only-cocoalib
+          make library
+
+      - name: Install CoCoALib into standard system locations
+        run: |
+          sudo mkdir -p /usr/local/include /usr/local/lib
+          sudo rsync -a /tmp/CoCoALib/include/CoCoA /usr/local/include/
+          sudo install -m 644 /tmp/CoCoALib/lib/libcocoa.a /usr/local/lib/libcocoa.a
+          sudo ldconfig
+
+      - name: Install Python package using auto-discovered CoCoALib
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Run installation smoke tests
+        run: |
+          python -c "import deepgroebner_pytorch_cocoa; import deepgroebner_pytorch_cocoa.wrapped as wrapped; print({'package': deepgroebner_pytorch_cocoa.__name__, 'wrapped': wrapped.__name__})"
+          python -c "import numpy as np; import gymnasium as gym; import deepgroebner_pytorch_cocoa; env=gym.make('BuchbergerExponents-v1'); obs, info = env.reset(seed=123); valid=np.flatnonzero(obs['P_mask']); action=int(valid[0]); obs2, reward, terminated, truncated, info2 = env.step(action); print({'env':'BuchbergerExponents-v1','reward':float(reward),'terminated':bool(terminated),'truncated':bool(truncated)})"
+          python -c "import gymnasium as gym; import deepgroebner_pytorch_cocoa; env=gym.make('BuchbergerExponentsNoPQ-v1'); obs, info = env.reset(seed=123); obs2, reward, terminated, truncated, info2 = env.step(0); print({'env':'BuchbergerExponentsNoPQ-v1','reward':float(reward),'terminated':bool(terminated),'truncated':bool(truncated)})"
+          deepgroebner-pytorch-cocoa-train --dry-run True --track False --total-timesteps 5000
+          pytest tests/test_runner.py

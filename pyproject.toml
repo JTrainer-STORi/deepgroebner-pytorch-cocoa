@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "Cython>=3.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepgroebner-pytorch-cocoa"
+version = "0.1.0"
+description = "Public-facing DeepGroebner-PyTorch release with a CoCoALib-backed runtime."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+classifiers = [
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Programming Language :: Python :: 3",
+]
+dependencies = [
+  "gymnasium",
+  "numpy",
+  "torch",
+  "tyro>=0.8",
+]
+
+[project.optional-dependencies]
+tracking = [
+  "wandb>=0.17",
+]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+deepgroebner-pytorch-cocoa-train = "deepgroebner_pytorch_cocoa.cli:main"
+deepgroebner-pytorch-cocoa-make-corpus = "deepgroebner_pytorch_cocoa.corpus_cli:main"
+deepgroebner-pytorch-cocoa-eval-corpus = "deepgroebner_pytorch_cocoa.eval_corpus_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+deepgroebner_pytorch_cocoa = ["*.pyx", "*.pxd", "*.h", "*.cpp"]

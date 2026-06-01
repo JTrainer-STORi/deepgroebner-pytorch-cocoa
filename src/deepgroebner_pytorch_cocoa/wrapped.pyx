@@ -1,0 +1,280 @@
+# distutils: language=c++
+# cython: language_level=3
+
+import numpy as np
+import cython
+from libcpp.vector cimport vector
+from libcpp.string cimport string
+
+from .buchberger cimport NoPQEnv, GLeadMonomialsEnv
+
+cdef class CNoPQEnv:
+    cdef NoPQEnv c_env
+    cdef bint return_dict
+
+    def __cinit__(self, ideal_dist="3-20-10-weighted", elimination="gebauermoeller", rewards="additions", sort_input=False, sort_reducers=True, fix_ideal=False, k=1, coeff_ring=None, symbols=None, basis=None, return_dict=False):
+        cdef vector[string] basis_cpp
+        self.return_dict = return_dict
+        if basis is not None:
+            for basis_elem in basis:
+                basis_cpp.push_back((<str>basis_elem).encode())
+
+        if coeff_ring is not None and symbols is not None and basis is not None:
+            self.c_env = NoPQEnv((<str>coeff_ring).encode(), (<str>symbols).encode(), basis_cpp, elimination.encode(), rewards.encode(), sort_input, sort_reducers, k)
+        else:
+            self.c_env = NoPQEnv(ideal_dist.encode(), elimination.encode(), rewards.encode(), sort_input, sort_reducers, fix_ideal, k)
+
+    def reset(self):
+        self.c_env.reset()
+        P = np.array(self.c_env.state, dtype=np.int32).reshape(-1, self.c_env.cols)
+        P_idx = np.array(self.c_env.P_idx, dtype=np.int32).reshape(-1, 2)
+        G = np.array(self.c_env.G_leads, dtype=np.int32).reshape(-1, self.c_env.g_cols)
+        state_feats = np.array(self.c_env.state_feature_vector, dtype=np.float32)
+        n_pairs = P.shape[0]
+        if self.return_dict:
+            return {"P": P, "P_idx": P_idx, "G": G, "state_feats": state_feats}, {'N_Pairs': n_pairs}
+        return P, {'N_Pairs': n_pairs}
+
+    def step(self, action):
+        reward = self.c_env.step(action)
+        P = np.array(self.c_env.state, dtype=np.int32).reshape(-1, self.c_env.cols)
+        P_idx = np.array(self.c_env.P_idx, dtype=np.int32).reshape(-1, 2)
+        G = np.array(self.c_env.G_leads, dtype=np.int32).reshape(-1, self.c_env.g_cols)
+        state_feats = np.array(self.c_env.state_feature_vector, dtype=np.float32)
+        n_pairs = P.shape[0]
+        terminated = (n_pairs == 0)
+        if self.return_dict:
+            return {"P": P, "P_idx": P_idx, "G": G, "state_feats": state_feats}, reward, terminated, {'N_Pairs': n_pairs}
+        return P, reward, terminated, {'N_Pairs': n_pairs}
+
+    def seed(self, seed=None):
+        if seed is not None:
+            self.c_env.set_seed(seed)
+
+    def value(self, strategy='degree', gamma=0.99):
+        return self.c_env.value(strategy.encode(), gamma)
+
+    def copy(self):
+        copy = CNoPQEnv()
+        copy.c_env = NoPQEnv(self.c_env)
+        return copy
+
+cdef class CGLeadMonomialsEnv:
+    cdef GLeadMonomialsEnv c_env
+    cdef object _G_buf
+    cdef object _P_buf
+    cdef object _P_idx_buf
+    cdef object _P_sugar_buf
+    cdef object _P_normal_rank_buf
+    cdef object _G_mask_buf
+    cdef object _P_mask_buf
+    cdef object _P_idx_raw_buf
+    cdef object _P_sugar_raw_buf
+    cdef object _P_normal_rank_raw_buf
+    cdef object _G_terms_buf
+    cdef object _G_term_counts_buf
+    cdef object _state_feats_buf
+    cdef object _obs
+    cdef bint _buffers_ready
+
+    def __cinit__(self, ideal_dist="3-20-10-weighted", elimination="gebauermoeller", rewards="additions", pq_strategy='first', sort_input=False, sort_reducers=True, fix_ideal=False, N=20, k=1, N_P=None, N_G=None, coeff_ring=None, symbols=None, basis=None):
+        cdef vector[string] basis_cpp
+        cdef int n_pair
+        cdef int n_basis
+        if N_P is None:
+            n_pair = <int>N
+        else:
+            n_pair = <int>N_P
+        if N_G is None:
+            n_basis = <int>N
+        else:
+            n_basis = <int>N_G
+        if basis is not None:
+            for basis_elem in basis:
+                basis_cpp.push_back((<str>basis_elem).encode())
+
+        if coeff_ring is not None and symbols is not None and basis is not None:
+            self.c_env = GLeadMonomialsEnv((<str>coeff_ring).encode(), (<str>symbols).encode(), basis_cpp, elimination.encode(), rewards.encode(), pq_strategy.encode(), sort_input, sort_reducers, N, k, n_pair, n_basis)
+        else:
+            self.c_env = GLeadMonomialsEnv(ideal_dist.encode(), elimination.encode(), rewards.encode(), pq_strategy.encode(), sort_input, sort_reducers, fix_ideal, N, k, n_pair, n_basis)
+        self._buffers_ready = False
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void _allocate_buffers(self):
+        cdef int n_g_slots = <int>self.c_env.G_mask.size()
+        cdef int n_p_slots = <int>self.c_env.P_mask.size()
+        cdef int feat_len = <int>self.c_env.state_feature_vector.size()
+        self._G_buf = np.empty((n_g_slots, self.c_env.g_cols), dtype=np.float32)
+        self._P_buf = np.empty((n_p_slots, self.c_env.p_cols), dtype=np.float32)
+        self._P_idx_buf = np.empty((n_p_slots, 2), dtype=np.int64)
+        self._P_sugar_buf = np.empty((n_p_slots,), dtype=np.float32)
+        self._P_normal_rank_buf = np.empty((n_p_slots,), dtype=np.float32)
+        self._G_mask_buf = np.empty((n_g_slots,), dtype=np.bool_)
+        self._P_mask_buf = np.empty((n_p_slots,), dtype=np.bool_)
+        self._P_idx_raw_buf = np.full((n_p_slots, 2), -1, dtype=np.int64)
+        self._P_sugar_raw_buf = np.empty((<int>self.c_env.P_sugars.size(),), dtype=np.float32)
+        self._P_normal_rank_raw_buf = np.empty((<int>self.c_env.P_normal_ranks.size(),), dtype=np.float32)
+        self._G_terms_buf = np.empty((<int>self.c_env.G_terms.size() // max(self.c_env.n_vars, 1), max(self.c_env.n_vars, 1)), dtype=np.float32)
+        self._G_term_counts_buf = np.empty((<int>self.c_env.G_term_counts.size(),), dtype=np.int64)
+        self._state_feats_buf = np.empty((feat_len,), dtype=np.float32)
+        self._obs = {
+            "G": self._G_buf,
+            "P": self._P_buf,
+            "P_idx": self._P_idx_buf,
+            "P_sugar": self._P_sugar_buf,
+            "P_normal_rank": self._P_normal_rank_buf,
+            "G_mask": self._G_mask_buf,
+            "P_mask": self._P_mask_buf,
+            "P_idx_raw": self._P_idx_raw_buf,
+            "P_sugar_raw": self._P_sugar_raw_buf,
+            "P_normal_rank_raw": self._P_normal_rank_raw_buf,
+            "G_terms": self._G_terms_buf,
+            "G_term_counts": self._G_term_counts_buf,
+            "state_feats": self._state_feats_buf,
+        }
+        self._buffers_ready = True
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void _refresh_buffers_from_cpp(self):
+        cdef Py_ssize_t i, j, idx
+        cdef int n_g_slots
+        cdef int n_p_slots
+        cdef int g_cols
+        cdef int p_cols
+        cdef int feat_len
+        cdef int n_vars
+        cdef object G_buf
+        cdef object P_buf
+        cdef object P_idx_buf
+        cdef object P_sugar_buf
+        cdef object P_normal_rank_buf
+        cdef object G_mask_buf
+        cdef object P_mask_buf
+        cdef object P_idx_raw_buf
+        cdef object P_sugar_raw_buf
+        cdef object P_normal_rank_raw_buf
+        cdef object G_terms_buf
+        cdef object G_term_counts_buf
+        cdef object state_feats_buf
+
+        n_g_slots = self.c_env.G_mask.size()
+        n_p_slots = self.c_env.P_mask.size()
+        g_cols = self.c_env.g_cols
+        p_cols = self.c_env.p_cols
+        feat_len = self.c_env.state_feature_vector.size()
+        n_vars = self.c_env.n_vars
+
+        if (
+            (not self._buffers_ready)
+            or self._G_buf.shape[0] != n_g_slots
+            or self._G_buf.shape[1] != g_cols
+            or self._P_buf.shape[0] != n_p_slots
+            or self._P_buf.shape[1] != p_cols
+            or self._P_idx_buf.shape[0] != n_p_slots
+            or self._P_sugar_buf.shape[0] != n_p_slots
+            or self._P_normal_rank_buf.shape[0] != n_p_slots
+            or self._G_mask_buf.shape[0] != n_g_slots
+            or self._P_mask_buf.shape[0] != n_p_slots
+            or self._P_idx_raw_buf.shape[0] != n_p_slots
+            or self._P_sugar_raw_buf.shape[0] != <int>self.c_env.P_sugars.size()
+            or self._P_normal_rank_raw_buf.shape[0] != <int>self.c_env.P_normal_ranks.size()
+            or self._G_terms_buf.shape[0] != <int>self.c_env.G_terms.size() // max(n_vars, 1)
+            or self._G_terms_buf.shape[1] != max(n_vars, 1)
+            or self._G_term_counts_buf.shape[0] != <int>self.c_env.G_term_counts.size()
+            or self._state_feats_buf.shape[0] != feat_len
+        ):
+            self._allocate_buffers()
+
+        G_buf = self._G_buf
+        P_buf = self._P_buf
+        P_idx_buf = self._P_idx_buf
+        P_sugar_buf = self._P_sugar_buf
+        P_normal_rank_buf = self._P_normal_rank_buf
+        G_mask_buf = self._G_mask_buf
+        P_mask_buf = self._P_mask_buf
+        P_idx_raw_buf = self._P_idx_raw_buf
+        P_sugar_raw_buf = self._P_sugar_raw_buf
+        P_normal_rank_raw_buf = self._P_normal_rank_raw_buf
+        G_terms_buf = self._G_terms_buf
+        G_term_counts_buf = self._G_term_counts_buf
+        state_feats_buf = self._state_feats_buf
+
+        idx = 0
+        for i in range(n_g_slots):
+            for j in range(g_cols):
+                G_buf[i, j] = self.c_env.G_padded[idx]
+                idx += 1
+
+        idx = 0
+        for i in range(n_p_slots):
+            for j in range(p_cols):
+                P_buf[i, j] = self.c_env.P_padded[idx]
+                idx += 1
+
+        idx = 0
+        for i in range(n_p_slots):
+            P_idx_buf[i, 0] = self.c_env.P_idx_padded[idx]
+            P_idx_buf[i, 1] = self.c_env.P_idx_padded[idx + 1]
+            idx += 2
+
+        for i in range(n_p_slots):
+            P_sugar_buf[i] = self.c_env.P_sugars_padded[i]
+            P_normal_rank_buf[i] = self.c_env.P_normal_ranks_padded[i]
+            P_mask_buf[i] = self.c_env.P_mask[i]
+
+        for i in range(n_g_slots):
+            G_mask_buf[i] = self.c_env.G_mask[i]
+
+        for i in range(n_p_slots):
+            P_idx_raw_buf[i, 0] = -1
+            P_idx_raw_buf[i, 1] = -1
+
+        idx = 0
+        for i in range(min(n_p_slots, <int>self.c_env.P_idx.size() // 2)):
+            P_idx_raw_buf[i, 0] = self.c_env.P_idx[idx]
+            P_idx_raw_buf[i, 1] = self.c_env.P_idx[idx + 1]
+            idx += 2
+
+        for i in range(<int>self.c_env.P_sugars.size()):
+            P_sugar_raw_buf[i] = self.c_env.P_sugars[i]
+
+        for i in range(<int>self.c_env.P_normal_ranks.size()):
+            P_normal_rank_raw_buf[i] = self.c_env.P_normal_ranks[i]
+
+        idx = 0
+        for i in range(<int>self.c_env.G_terms.size() // max(n_vars, 1)):
+            for j in range(n_vars):
+                G_terms_buf[i, j] = self.c_env.G_terms[idx]
+                idx += 1
+
+        for i in range(<int>self.c_env.G_term_counts.size()):
+            G_term_counts_buf[i] = self.c_env.G_term_counts[i]
+
+        for i in range(feat_len):
+            state_feats_buf[i] = self.c_env.state_feature_vector[i]
+
+    def reset(self):
+        self.c_env.reset()
+        self._refresh_buffers_from_cpp()
+        basis_elements = [s.decode("utf-8") for s in self.c_env.basis_elements]
+        return self._obs, {"basis_elements": basis_elements}
+
+    def step(self, action):
+        reward = self.c_env.step(action)
+        self._refresh_buffers_from_cpp()
+        basis_elements = [s.decode("utf-8") for s in self.c_env.basis_elements]
+        return self._obs, reward, self.c_env.N_Pairs == 0, {"basis_elements": basis_elements}
+
+    def seed(self, seed=None):
+        if seed is not None:
+            self.c_env.set_seed(seed)
+
+    def value(self, strategy='degree', gamma=0.99):
+        return self.c_env.value(strategy.encode(), gamma)
+
+    def copy(self):
+        copy = CGLeadMonomialsEnv()
+        copy.c_env = GLeadMonomialsEnv(self.c_env)
+        return copy
