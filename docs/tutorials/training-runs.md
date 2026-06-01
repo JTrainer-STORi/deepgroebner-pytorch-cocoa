@@ -194,7 +194,7 @@ deepgroebner-pytorch-cocoa-train \
 The underlying trainer also supports W&B-specific settings. For example:
 
 ```bash
-python ppo_masked.py \
+python -m deepgroebner_pytorch_cocoa.ppo_masked \
   --env.gym_id=BuchbergerExponents-v1 \
   --env.ideal_dist=3-20-10-weighted \
   --training.total_timesteps=1000000 \
@@ -210,14 +210,14 @@ python ppo_masked.py \
   --actor.pair_combiner=film
 ```
 
-Use the public wrapper when you want the smaller supported interface. Use `ppo_masked.py` directly when you need advanced trainer-only flags such as W&B grouping or richer evaluation controls.
+Use the public wrapper when you want the smaller supported interface. Use `python -m deepgroebner_pytorch_cocoa.ppo_masked` directly when you need advanced trainer-only flags such as W&B grouping or richer evaluation controls.
 
 ## Training on a Fixed Ideal
 
 The small public wrapper does not expose fixed-ideal training directly. For that workflow, call the trainer with explicit basis data:
 
 ```bash
-python ppo_masked.py \
+python -m deepgroebner_pytorch_cocoa.ppo_masked \
   --env.gym_id=BuchbergerExponents-v1 \
   --env.coeff_ring=QQ \
   --env.symbols=x,y \

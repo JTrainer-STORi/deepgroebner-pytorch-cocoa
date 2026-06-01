@@ -52,6 +52,43 @@ def _resolve_library_dir() -> str | None:
             "/usr/lib",
             "/usr/lib/x86_64-linux-gnu",
             "/opt/homebrew/lib",
+            "/opt/homebrew/opt/gmp/lib",
+            "/usr/local/opt/gmp/lib",
+            "/opt/local/lib",
+        ]
+    )
+
+
+def _resolve_gmp_include_dir() -> str | None:
+    env_value = os.environ.get("GMP_INCLUDE_DIR")
+    if env_value:
+        return env_value
+
+    return _first_existing(
+        [
+            "/usr/local/include",
+            "/usr/include",
+            "/opt/homebrew/include",
+            "/opt/homebrew/opt/gmp/include",
+            "/usr/local/opt/gmp/include",
+            "/opt/local/include",
+        ]
+    )
+
+
+def _resolve_gmp_library_dir() -> str | None:
+    env_value = os.environ.get("GMP_LIB_DIR")
+    if env_value:
+        return env_value
+
+    return _first_existing(
+        [
+            "/usr/local/lib",
+            "/usr/lib",
+            "/usr/lib/x86_64-linux-gnu",
+            "/opt/homebrew/lib",
+            "/opt/homebrew/opt/gmp/lib",
+            "/usr/local/opt/gmp/lib",
             "/opt/local/lib",
         ]
     )
@@ -63,6 +100,10 @@ def _resolve_extension() -> Extension:
         str(PACKAGE_DIR),
         _resolve_cocoa_include_dir(),
     ]
+    gmp_include_dir = _resolve_gmp_include_dir()
+    if gmp_include_dir is not None:
+        include_dirs.append(gmp_include_dir)
+
     library_dirs: list[str] = []
     extra_objects: list[str] = []
     libraries: list[str] = []
@@ -77,6 +118,12 @@ def _resolve_extension() -> Extension:
         resolved_lib_dir = _resolve_library_dir()
         if resolved_lib_dir is not None:
             library_dirs.append(resolved_lib_dir)
+        gmp_lib_dir = _resolve_gmp_library_dir()
+        if gmp_lib_dir is not None and gmp_lib_dir not in library_dirs:
+            library_dirs.append(gmp_lib_dir)
+
+    include_dirs = list(dict.fromkeys(include_dirs))
+    library_dirs = list(dict.fromkeys(library_dirs))
 
     return Extension(
         name="deepgroebner_pytorch_cocoa.wrapped",

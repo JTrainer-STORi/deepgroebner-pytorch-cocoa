@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
-from pathlib import Path
+import importlib
 import shlex
 import subprocess
 import sys
@@ -11,6 +10,9 @@ from typing import Literal
 import tyro
 
 from .presets import get_architecture_preset
+
+
+TRAINING_MODULE = "deepgroebner_pytorch_cocoa.ppo_masked"
 
 
 @dataclass
@@ -39,21 +41,8 @@ class TrainConfig:
     save_critic: tyro.conf.FlagConversionOff[bool] = False
     dry_run: tyro.conf.FlagConversionOff[bool] = False
 
-
-def _default_repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
-
-
-def resolve_training_entrypoint() -> Path:
-    configured_root = os.environ.get("DEEPGROEBNER_TRAINER_ROOT")
-    repo_root = Path(configured_root).expanduser() if configured_root else _default_repo_root()
-    entrypoint = repo_root / "ppo_masked.py"
-    if not entrypoint.exists():
-        raise FileNotFoundError(
-            "Could not find `ppo_masked.py`. "
-            "Set DEEPGROEBNER_TRAINER_ROOT to the repository root if the trainer lives elsewhere."
-        )
-    return entrypoint
+def load_training_module():
+    return importlib.import_module(TRAINING_MODULE)
 
 
 def build_training_cli_args(cfg: TrainConfig) -> list[str]:
@@ -88,7 +77,8 @@ def build_training_cli_args(cfg: TrainConfig) -> list[str]:
 
 
 def build_training_command(cfg: TrainConfig) -> list[str]:
-    return [sys.executable, str(resolve_training_entrypoint()), *build_training_cli_args(cfg)]
+    load_training_module()
+    return [sys.executable, "-m", TRAINING_MODULE, *build_training_cli_args(cfg)]
 
 
 def format_command(command: list[str]) -> str:

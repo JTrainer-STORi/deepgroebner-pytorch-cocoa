@@ -41,7 +41,7 @@ def test_build_training_command_points_at_trainer_entrypoint():
     command = build_training_command(TrainConfig(dry_run=True))
 
     assert command[0]
-    assert command[1].endswith("ppo_masked.py")
+    assert command[1:3] == ["-m", "deepgroebner_pytorch_cocoa.ppo_masked"]
     assert "--env.gym_id=BuchbergerExponents-v1" in command
 
 

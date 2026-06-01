@@ -151,7 +151,7 @@ deepgroebner-pytorch-cocoa-train \
 The small public wrapper currently keeps evaluation simple and only enables train-environment greedy eval by default. To evaluate against the NoPQ environment too, call the trainer directly:
 
 ```bash
-python ppo_masked.py \
+python -m deepgroebner_pytorch_cocoa.ppo_masked \
   --env.gym_id=BuchbergerExponents-v1 \
   --env.ideal_dist='cyclic-(3-6)' \
   --training.total_timesteps=1000000 \
@@ -198,7 +198,7 @@ deepgroebner-pytorch-cocoa-train \
 If you want explicit W&B project or group settings, use the trainer directly:
 
 ```bash
-python ppo_masked.py \
+python -m deepgroebner_pytorch_cocoa.ppo_masked \
   --env.gym_id=BuchbergerExponents-v1 \
   --env.ideal_dist='geom-(3-5)' \
   --training.total_timesteps=1000000 \

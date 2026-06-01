@@ -14,7 +14,8 @@
             "src/deepgroebner_pytorch_cocoa",
             "/home/trainer1/deepgroebner-pytorch-cocoa/src",
             "/home/trainer1/deepgroebner-pytorch-cocoa/src/deepgroebner_pytorch_cocoa",
-            "/home/trainer1/deepgroebner_pytorch/CoCoALib/include"
+            "/home/trainer1/deepgroebner_pytorch/CoCoALib/include",
+            "/usr/local/include"
         ],
         "language": "c++",
         "libraries": [
@@ -22,7 +23,8 @@
             "gmp"
         ],
         "library_dirs": [
-            "/home/trainer1/deepgroebner_pytorch/CoCoALib/lib"
+            "/home/trainer1/deepgroebner_pytorch/CoCoALib/lib",
+            "/usr/local/lib"
         ],
         "name": "deepgroebner_pytorch_cocoa.wrapped",
         "sources": [

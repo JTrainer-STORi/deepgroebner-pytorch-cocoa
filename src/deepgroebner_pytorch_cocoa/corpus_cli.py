@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import importlib.util
 from pathlib import Path
 from typing import Literal
 
 import tyro
 
 from deepgroebner_pytorch_cocoa.config_dataclasses import Config
-from deepgroebner_pytorch_cocoa.runner import resolve_training_entrypoint
+from deepgroebner_pytorch_cocoa.runner import load_training_module
 
 
 @dataclass
@@ -49,13 +48,7 @@ def _build_internal_config(cli_cfg: CorpusConfig) -> Config:
 
 
 def _load_trainer_module():
-    entrypoint = resolve_training_entrypoint()
-    spec = importlib.util.spec_from_file_location("deepgroebner_pytorch_cocoa._trainer_module", entrypoint)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not load trainer module from {entrypoint}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_training_module()
 
 
 def main() -> None:

@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 import csv
 import datetime
-import importlib.util
 import json
 from pathlib import Path
 import random
@@ -16,7 +15,7 @@ import tyro
 
 from .combined_networks import CombinedPolicyNetwork, checkpoint_uses_legacy_pair_scoring_head
 from .config_dataclasses import ActorConfig, EnvConfig, ModelInputs
-from .runner import resolve_training_entrypoint
+from .runner import load_training_module
 
 
 DEFAULT_STATE_FEATURE_NAMES = [
@@ -67,13 +66,7 @@ def _console_print(cfg: EvalCorpusConfig, *parts: object, level: Literal["normal
 
 
 def _load_trainer_module():
-    entrypoint = resolve_training_entrypoint()
-    spec = importlib.util.spec_from_file_location("deepgroebner_pytorch_cocoa._trainer_module", entrypoint)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not load trainer module from {entrypoint}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_training_module()
 
 
 def _space_last_dim(space: Any) -> int:
