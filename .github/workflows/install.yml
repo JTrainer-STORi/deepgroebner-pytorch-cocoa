@@ -75,10 +75,7 @@ jobs:
 
       - name: Run installation smoke tests
         run: |
-          python -c "import deepgroebner_pytorch_cocoa; import deepgroebner_pytorch_cocoa.wrapped as wrapped; print({'package': deepgroebner_pytorch_cocoa.__name__, 'wrapped': wrapped.__name__})"
-          python -c "import numpy as np; import gymnasium as gym; import deepgroebner_pytorch_cocoa; env=gym.make('BuchbergerExponents-v1'); obs, info = env.reset(seed=123); valid=np.flatnonzero(obs['P_mask']); action=int(valid[0]); obs2, reward, terminated, truncated, info2 = env.step(action); print({'env':'BuchbergerExponents-v1','reward':float(reward),'terminated':bool(terminated),'truncated':bool(truncated)})"
-          python -c "import gymnasium as gym; import deepgroebner_pytorch_cocoa; env=gym.make('BuchbergerExponentsNoPQ-v1'); obs, info = env.reset(seed=123); obs2, reward, terminated, truncated, info2 = env.step(0); print({'env':'BuchbergerExponentsNoPQ-v1','reward':float(reward),'terminated':bool(terminated),'truncated':bool(truncated)})"
-          deepgroebner-pytorch-cocoa-train --dry-run True --track False --total-timesteps 5000
+          deepgroebner-pytorch-cocoa-verify
           pytest tests/test_runner.py
 
   install-standard-system-location:
@@ -120,8 +117,5 @@ jobs:
 
       - name: Run installation smoke tests
         run: |
-          python -c "import deepgroebner_pytorch_cocoa; import deepgroebner_pytorch_cocoa.wrapped as wrapped; print({'package': deepgroebner_pytorch_cocoa.__name__, 'wrapped': wrapped.__name__})"
-          python -c "import numpy as np; import gymnasium as gym; import deepgroebner_pytorch_cocoa; env=gym.make('BuchbergerExponents-v1'); obs, info = env.reset(seed=123); valid=np.flatnonzero(obs['P_mask']); action=int(valid[0]); obs2, reward, terminated, truncated, info2 = env.step(action); print({'env':'BuchbergerExponents-v1','reward':float(reward),'terminated':bool(terminated),'truncated':bool(truncated)})"
-          python -c "import gymnasium as gym; import deepgroebner_pytorch_cocoa; env=gym.make('BuchbergerExponentsNoPQ-v1'); obs, info = env.reset(seed=123); obs2, reward, terminated, truncated, info2 = env.step(0); print({'env':'BuchbergerExponentsNoPQ-v1','reward':float(reward),'terminated':bool(terminated),'truncated':bool(truncated)})"
-          deepgroebner-pytorch-cocoa-train --dry-run True --track False --total-timesteps 5000
+          deepgroebner-pytorch-cocoa-verify
           pytest tests/test_runner.py
