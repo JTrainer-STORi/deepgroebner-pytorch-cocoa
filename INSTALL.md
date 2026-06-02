@@ -58,7 +58,7 @@ On a typical Linux machine, the most common "standard" install is:
 - headers under `/usr/local/include/CoCoA/`
 - library at `/usr/local/lib/libcocoa.a` or `/usr/local/lib/libcocoa.so`
 
-Important: building CoCoALib in a local checkout directory does not automatically make it a "standard system install" for this package. For example, if you downloaded and built CoCoALib under a directory such as `~/CoCoALib` or `~/deepgroebner_pytorch/CoCoALib`, the headers and library will usually still live in that checkout's `include/` and `lib/` directories unless you explicitly install or copy them into a standard location such as `/usr/local/include` and `/usr/local/lib`.
+Important: building CoCoALib in a local checkout directory does not automatically make it a "standard system install" for this package. For example, if you downloaded and built CoCoALib under a directory such as `~/CoCoALib` or `~/deepgroebner-pytorch-cocoa/CoCoALib`, the headers and library will usually still live in that checkout's `include/` and `lib/` directories unless you explicitly install or copy them into a standard location such as `/usr/local/include` and `/usr/local/lib`.
 
 So if you only built CoCoALib locally and did not install or copy its files into a standard system location, you should set the environment variables below instead of assuming the build will find it automatically.
 
