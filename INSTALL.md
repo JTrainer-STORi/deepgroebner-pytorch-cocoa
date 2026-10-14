@@ -101,6 +101,9 @@ pip install -e .
 
 Use this if you are developing inside this checkout. The package stays linked to the source tree, so local code edits are picked up without reinstalling.
 
+Cython or C++ source changes still require rebuilding the extension by rerunning
+the installation command.
+
 Regular install:
 
 ```bash
@@ -145,6 +148,16 @@ See the
 [training tutorial](docs/tutorials/training-runs.md) and
 [corpus and evaluation tutorial](docs/tutorials/eval-corpora-and-greedy-eval.md)
 for examples.
+
+The Laman graph tables in
+`src/deepgroebner_pytorch_cocoa/data/LamanGraphs3-10/` are included in the installed
+package. Geometric distributions do not require a separate data download or a
+particular working directory.
+
+For notebooks or other Python projects, install into that project's Python
+environment and import the package modules directly. The corpus and evaluation
+tutorial includes examples using `corpus_generation.generate_corpus` with a
+`CorpusConfig` and `model_evaluation.evaluate` with an `EvalCorpusConfig`.
 
 ## Troubleshooting
 

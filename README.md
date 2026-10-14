@@ -22,6 +22,15 @@ See [INSTALL.md](INSTALL.md) for installation checks using pytest.
 - [Training Runs](docs/tutorials/training-runs.md)
 - [Eval Corpora And Greedy Evaluation](docs/tutorials/eval-corpora-and-greedy-eval.md)
 
+Training, corpus generation, and checkpoint evaluation can also be called from
+notebooks or other Python projects using the installed package. See the corpus
+and evaluation tutorial for the `generate_corpus(CorpusConfig(...))` and
+`evaluate(EvalCorpusConfig(...))` APIs.
+
+Geometric ideal distributions use the bundled Laman graph tables for 3 to 10
+vertices. These files are installed with the package, so geometric environments
+can be created from any working directory.
+
 ## Tracking with W&B
 
 If you want to be able to use your Weights & Biases account to track training runs, make sure to install the optional tracking dependency and log in to Weights and Biases.

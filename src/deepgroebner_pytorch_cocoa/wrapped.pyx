@@ -3,10 +3,12 @@
 
 import numpy as np
 import cython
+from os import fsencode
 from libcpp.vector cimport vector
 from libcpp.string cimport string
 
 from .buchberger cimport NoPQEnv, GLeadMonomialsEnv
+from .package_resources import laman_graph_directory
 
 cdef class CNoPQEnv:
     cdef NoPQEnv c_env
@@ -14,15 +16,25 @@ cdef class CNoPQEnv:
 
     def __cinit__(self, ideal_dist="3-20-10-weighted", elimination="gebauermoeller", rewards="additions", sort_input=False, sort_reducers=True, fix_ideal=False, k=1, coeff_ring=None, symbols=None, basis=None, return_dict=False):
         cdef vector[string] basis_cpp
+        cdef string elimination_cpp = elimination.encode()
+        cdef string rewards_cpp = rewards.encode()
+        cdef string ideal_dist_cpp
+        cdef string graph_directory_cpp
+        cdef string coeff_ring_cpp
+        cdef string symbols_cpp
         self.return_dict = return_dict
         if basis is not None:
             for basis_elem in basis:
                 basis_cpp.push_back((<str>basis_elem).encode())
 
         if coeff_ring is not None and symbols is not None and basis is not None:
-            self.c_env = NoPQEnv((<str>coeff_ring).encode(), (<str>symbols).encode(), basis_cpp, elimination.encode(), rewards.encode(), sort_input, sort_reducers, k)
+            coeff_ring_cpp = (<str>coeff_ring).encode()
+            symbols_cpp = (<str>symbols).encode()
+            self.c_env = NoPQEnv(coeff_ring_cpp, symbols_cpp, basis_cpp, elimination_cpp, rewards_cpp, <bint>sort_input, <bint>sort_reducers, <int>k)
         else:
-            self.c_env = NoPQEnv(ideal_dist.encode(), elimination.encode(), rewards.encode(), sort_input, sort_reducers, fix_ideal, k)
+            ideal_dist_cpp = ideal_dist.encode()
+            graph_directory_cpp = fsencode(laman_graph_directory())
+            self.c_env = NoPQEnv(ideal_dist_cpp, elimination_cpp, rewards_cpp, <bint>sort_input, <bint>sort_reducers, <bint>fix_ideal, <int>k, graph_directory_cpp)
 
     def reset(self):
         self.c_env.reset()
@@ -72,6 +84,13 @@ cdef class CGLeadMonomialsEnv:
 
     def __cinit__(self, ideal_dist="3-20-10-weighted", elimination="gebauermoeller", rewards="additions", pq_strategy='first', sort_input=False, sort_reducers=True, fix_ideal=False, N=20, k=1, N_P=None, N_G=None, coeff_ring=None, symbols=None, basis=None):
         cdef vector[string] basis_cpp
+        cdef string elimination_cpp = elimination.encode()
+        cdef string rewards_cpp = rewards.encode()
+        cdef string pq_strategy_cpp = pq_strategy.encode()
+        cdef string ideal_dist_cpp
+        cdef string graph_directory_cpp
+        cdef string coeff_ring_cpp
+        cdef string symbols_cpp
         cdef int n_pair
         cdef int n_basis
         if N_P is None:
@@ -87,9 +106,13 @@ cdef class CGLeadMonomialsEnv:
                 basis_cpp.push_back((<str>basis_elem).encode())
 
         if coeff_ring is not None and symbols is not None and basis is not None:
-            self.c_env = GLeadMonomialsEnv((<str>coeff_ring).encode(), (<str>symbols).encode(), basis_cpp, elimination.encode(), rewards.encode(), pq_strategy.encode(), sort_input, sort_reducers, N, k, n_pair, n_basis)
+            coeff_ring_cpp = (<str>coeff_ring).encode()
+            symbols_cpp = (<str>symbols).encode()
+            self.c_env = GLeadMonomialsEnv(coeff_ring_cpp, symbols_cpp, basis_cpp, elimination_cpp, rewards_cpp, pq_strategy_cpp, <bint>sort_input, <bint>sort_reducers, <int>N, <int>k, n_pair, n_basis)
         else:
-            self.c_env = GLeadMonomialsEnv(ideal_dist.encode(), elimination.encode(), rewards.encode(), pq_strategy.encode(), sort_input, sort_reducers, fix_ideal, N, k, n_pair, n_basis)
+            ideal_dist_cpp = ideal_dist.encode()
+            graph_directory_cpp = fsencode(laman_graph_directory())
+            self.c_env = GLeadMonomialsEnv(ideal_dist_cpp, elimination_cpp, rewards_cpp, pq_strategy_cpp, <bint>sort_input, <bint>sort_reducers, <bint>fix_ideal, <int>N, <int>k, n_pair, n_basis, graph_directory_cpp)
         self._buffers_ready = False
 
     

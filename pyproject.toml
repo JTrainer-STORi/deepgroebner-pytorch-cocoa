@@ -35,4 +35,8 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-deepgroebner_pytorch_cocoa = ["*.pyx", "*.pxd", "*.h", "*.cpp"]
+deepgroebner_pytorch_cocoa = [
+  "*.pyx", "*.pxd", "*.h", "*.cpp",
+  "data/LamanGraphs3-10/LamanGraphs[3-9].txt",
+  "data/LamanGraphs3-10/LamanGraphs10.txt",
+]

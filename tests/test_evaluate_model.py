@@ -6,7 +6,7 @@ import torch
 
 from deepgroebner_pytorch_cocoa.combined_networks import CombinedPolicyNetwork
 from deepgroebner_pytorch_cocoa.config_dataclasses import ActorConfig, ModelInputs
-from evaluate_model import (
+from deepgroebner_pytorch_cocoa.model_evaluation import (
     _build_queue_usage_summary,
     _compute_queue_usage_stats,
     _extract_run_id,

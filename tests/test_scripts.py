@@ -9,6 +9,11 @@ import evaluate_model
 import generate_corpus
 import run_training
 from deepgroebner_pytorch_cocoa.config_dataclasses import Config
+from deepgroebner_pytorch_cocoa.model_evaluation import (
+    EvalCorpusConfig,
+    EvaluationResult,
+    evaluate,
+)
 
 
 def test_training_script_passes_default_config_directly_to_trainer(monkeypatch):
@@ -120,7 +125,7 @@ def test_scripts_expose_help_without_running_jobs(script, option, capsys):
     assert option in capsys.readouterr().out
 
 
-def test_scripts_generate_train_and_evaluate_a_fixed_ideal(tmp_path):
+def test_scripts_generate_train_and_evaluate_a_fixed_ideal(tmp_path, monkeypatch):
     basis = "x^2 - y,x*y - 1,y^2 - x"
     corpus_path = tmp_path / "corpus.jsonl"
     corpus_args = [
@@ -167,9 +172,13 @@ def test_scripts_generate_train_and_evaluate_a_fixed_ideal(tmp_path):
     actor_path = Path(result.checkpoint_paths["actor"])
     assert actor_path.is_file()
 
+    other_project = tmp_path / "other_project"
+    other_project.mkdir()
+    monkeypatch.chdir(other_project)
+
     for gym_id in ("BuchbergerExponents-v1", "BuchbergerExponentsNoPQ-v1"):
         output = tmp_path / gym_id
-        evaluate_model.main(
+        cli_result = evaluate_model.main(
             [
                 f"--corpus={corpus_path}",
                 f"--model-name={actor_path}",
@@ -190,3 +199,27 @@ def test_scripts_generate_train_and_evaluate_a_fixed_ideal(tmp_path):
         metadata = json.loads((output / "metadata.json").read_text())
         assert metadata["gym_id"] == gym_id
         assert Path(metadata["model_path"]) == actor_path.resolve()
+
+        api_output = tmp_path / "api" / gym_id
+        api_result = evaluate(
+            EvalCorpusConfig(
+                corpus=str(corpus_path),
+                model_name=str(actor_path),
+                gym_id=gym_id,
+                device="cpu",
+                verbosity="quiet",
+                output_dir=str(api_output),
+            )
+        )
+        assert isinstance(api_result, EvaluationResult)
+        assert api_result.summary == cli_result.summary == summary
+        assert api_result.episode_results == cli_result.episode_results == episodes
+        assert api_result.output_directory == str(api_output.resolve())
+        assert set(api_result.artifact_paths) == {
+            "episode_results_csv",
+            "episode_results_jsonl",
+            "summary",
+            "metadata",
+        }
+        assert all(Path(path).is_file() for path in api_result.artifact_paths.values())
+        assert json.loads(Path(api_result.artifact_paths["summary"]).read_text()) == summary

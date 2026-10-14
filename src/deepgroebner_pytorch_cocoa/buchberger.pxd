@@ -7,7 +7,7 @@ cdef extern from "buchberger.cpp" namespace "CoCoA":
 cdef extern from "buchberger.h" namespace "CoCoA":
     cdef cppclass NoPQEnv:
         NoPQEnv() except +
-        NoPQEnv(string, string, string, bint, bint, bint, int) except +
+        NoPQEnv(string, string, string, bint, bint, bint, int, string) except +
         NoPQEnv(string, string, vector[string], string, string, bint, bint, int) except +
         NoPQEnv(const NoPQEnv&)
         void reset()
@@ -25,7 +25,7 @@ cdef extern from "buchberger.h" namespace "CoCoA":
 cdef extern from "buchberger.h" namespace "CoCoA":
     cdef cppclass GLeadMonomialsEnv:
         GLeadMonomialsEnv() except +
-        GLeadMonomialsEnv(string, string, string, string, bint, bint, bint, int, int, int, int) except +
+        GLeadMonomialsEnv(string, string, string, string, bint, bint, bint, int, int, int, int, string) except +
         GLeadMonomialsEnv(string, string, vector[string], string, string, string, bint, bint, int, int, int, int) except +
         GLeadMonomialsEnv(const GLeadMonomialsEnv&)
         void reset()

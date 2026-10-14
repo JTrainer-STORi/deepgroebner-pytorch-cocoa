@@ -7,6 +7,7 @@ and converts them into ideals that can be passed to Buchberger's algorithm */
 
 #include <iostream>
 #include <fstream>
+#include <filesystem>
 #include <sstream>
 #include <cmath>
 #include <iomanip>
@@ -49,10 +50,15 @@ long sizeUD(const long& n)
   return s;
 }
 
-std::vector<std::pair<int, int>> intToEdges(std::string nVertices, std::mt19937& rng)
+std::vector<std::pair<int, int>> intToEdges(
+    const std::string& nVertices,
+    const std::string& laman_graph_directory,
+    std::mt19937& rng)
 {
   std::string line;
-  std::string filepath = "data/LamanGraphs3-10/LamanGraphs" + nVertices + ".txt";
+  const std::string filepath = (
+      std::filesystem::path(laman_graph_directory) / ("LamanGraphs" + nVertices + ".txt")
+  ).string();
   std::ifstream myfile (filepath);
   std::vector<long> record;
   std::vector<std::pair<int, int>> edges; // initialize vector of edges
@@ -662,10 +668,14 @@ namespace CoCoA
 
   }
 
-  GeomIdealGenerator::GeomIdealGenerator(long n): n(n) // Constructor for GeomIdealGenerator
+  GeomIdealGenerator::GeomIdealGenerator(long n, std::string laman_graph_directory)
+      : n(n), laman_graph_directory(std::move(laman_graph_directory))
   {
     if (n < 3 || n > 10) {
       throw std::invalid_argument("GeomIdealGenerator supports n in [3, 10] (LamanGraphs3-10 data)");
+    }
+    if (this->laman_graph_directory.empty()) {
+      throw std::invalid_argument("Geometric ideals require a Laman graph data directory");
     }
 
     std::string xsyms; // Initialize vector to store x co-ordinates/symbols
@@ -691,13 +701,16 @@ namespace CoCoA
 
   }
 
-  RangeGeomIdealGenerator::RangeGeomIdealGenerator(long n_min, long n_max)
-      : n_min(n_min), n_max(n_max), n_dist(n_min, n_max) {
+  RangeGeomIdealGenerator::RangeGeomIdealGenerator(long n_min, long n_max, std::string laman_graph_directory)
+      : n_min(n_min), n_max(n_max), laman_graph_directory(std::move(laman_graph_directory)), n_dist(n_min, n_max) {
     if (n_min > n_max) {
       throw std::invalid_argument("Invalid geom range bounds: min must be <= max");
     }
     if (n_min < 3 || n_max > 10) {
       throw std::invalid_argument("RangeGeomIdealGenerator supports n in [3, 10] (LamanGraphs3-10 data)");
+    }
+    if (this->laman_graph_directory.empty()) {
+      throw std::invalid_argument("Geometric ideals require a Laman graph data directory");
     }
 
     std::random_device rand;
@@ -706,7 +719,7 @@ namespace CoCoA
 
   ideal RangeGeomIdealGenerator::next() {
     const long sampled_n = n_dist(rng);
-    GeomIdealGenerator geom_gen(sampled_n);
+    GeomIdealGenerator geom_gen(sampled_n, laman_graph_directory);
     geom_gen.seed(static_cast<int>(rng()));
     return geom_gen.next();
   }
@@ -715,7 +728,7 @@ namespace CoCoA
   ideal GeomIdealGenerator::next() // next method for GeomIdealGenerator
   {
 
-    edges = intToEdges(std::to_string(n), rng);
+    edges = intToEdges(std::to_string(n), laman_graph_directory, rng);
 
     std::vector<RingElem> xindets(indets(P).begin(), indets(P).begin() + (n-1)); // Makes a vector of all the x variables accounting for the fact that x1 is missing 
     std::vector<RingElem> yindets(indets(P).begin() + (n-1), indets(P).end()); // Likewise for y variables
@@ -807,7 +820,8 @@ namespace CoCoA
     return ideal(build_benchmark_polys(cls_n.first, cls_n.second));
   }
 
-  std::unique_ptr<IdealGenerator> parse_ideal_dist(const std::string& ideal_dist) {
+  std::unique_ptr<IdealGenerator> parse_ideal_dist(
+      const std::string& ideal_dist, const std::string& laman_graph_directory) {
 
     std::vector<std::string> dist_args = split_top_level_dash(ideal_dist);
 
@@ -819,9 +833,9 @@ namespace CoCoA
 
       IntRange n_range = parse_int_or_range_token(dist_args[1], "n");
       if (n_range.lo == n_range.hi) {
-        return std::make_unique<GeomIdealGenerator>(n_range.lo);
+        return std::make_unique<GeomIdealGenerator>(n_range.lo, laman_graph_directory);
       }
-      return std::make_unique<RangeGeomIdealGenerator>(n_range.lo, n_range.hi);
+      return std::make_unique<RangeGeomIdealGenerator>(n_range.lo, n_range.hi, laman_graph_directory);
     }
 
     if (dist_args.size() == 2 && !dist_args[0].empty() &&

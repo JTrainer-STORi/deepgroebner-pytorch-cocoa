@@ -92,9 +92,42 @@ python generate_corpus.py \
   --output-path corpora/geom_3_5_seed10000.jsonl
 ```
 
+### Generate From Python Or A Notebook
+
+The installed package exposes corpus generation directly, using the same
+configuration and JSONL format as the script. Your notebook or project can live
+outside this repository:
+
+```python
+from deepgroebner_pytorch_cocoa.corpus_generation import CorpusConfig, generate_corpus
+
+result = generate_corpus(
+    CorpusConfig(
+        ideal_distribution="geom-(3-5)",
+        examples=5,
+        seed=10000,
+        output_path="/path/to/corpora/geom_3_5.jsonl",
+    )
+)
+
+print(result.corpus_path)
+print(len(result.corpus_rows))
+print(result.generated)
+```
+
+`generate_corpus()` returns a `CorpusGenerationResult` containing the corpus rows,
+the absolute path to the saved JSONL file, and whether it generated a new corpus.
+An existing explicit output file is protected unless `overwrite=True` is set.
+
+Omit `output_path` to reuse the default cache under
+`eval_corpora/greedy_eval/` in the caller's working directory. On a cache hit,
+`result.generated` is `False`. Relative output paths also use the caller's working
+directory; absolute paths let you choose a location independently. The bundled
+Laman graph tables are loaded from the installed package in either case.
+
 ## Enable Greedy Evaluation During Training
 
-The supported public evaluation workflow today is training-time greedy evaluation. The trainer either loads a matching cached corpus or generates one automatically before the first evaluation round.
+The trainer either loads a matching cached corpus or generates one automatically before the first evaluation round. To evaluate an existing checkpoint separately, use the command-line tool or Python API shown below.
 
 The training examples below explicitly enable a Deep Set state head. Omit that option for the default SPEM actor without state heads, or add `--actor.state-features-embedding-head mlp` to include handcrafted features.
 
@@ -252,10 +285,41 @@ The command writes:
 - `summary.json`
 - `metadata.json`
 
+### Evaluate From Python Or A Notebook
+
+The installed package exposes the same evaluation workflow directly. Import it
+from any project using the Python environment where the package is installed:
+
+```python
+from deepgroebner_pytorch_cocoa.model_evaluation import EvalCorpusConfig, evaluate
+
+result = evaluate(
+    EvalCorpusConfig(
+        corpus="/path/to/corpus.jsonl",
+        model_name="/path/to/models/actors/my_run.pt",
+        gym_id="BuchbergerExponentsNoPQ-v1",
+        device="cpu",
+        output_dir="/path/to/evaluation",
+    )
+)
+
+print(result.summary["return_mean"])
+print(result.episode_results)
+print(result.output_directory)
+print(result.artifact_paths["summary"])
+```
+
+`evaluate()` returns an `EvaluationResult` containing summary metrics, per-episode
+results, the output directory, and paths to all four reports. It also writes the
+same files as `python evaluate_model.py`. The checkpoint's companion
+`__config.json` is loaded automatically; set `config_path` to use another snapshot.
+Relative input and output paths use the caller's current working directory.
+
 ## Current Scope
 
 The public repo now exposes:
 
-- corpus generation
+- corpus generation through the script or installed Python API
 - training-time greedy evaluation
 - standalone checkpoint evaluation against a saved corpus
+- checkpoint evaluation through the installed Python API

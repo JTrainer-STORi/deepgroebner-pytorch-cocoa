@@ -810,9 +810,10 @@ void update(std::vector<RingElem>& G,
                                 RewardType rewards,
                                 bool sort_input,
                                 bool sort_reducers,
-                                bool fix_ideal) : elimination(elimination), rewards(RewardType::Additions), sort_input(sort_input),
+                                bool fix_ideal,
+                                std::string laman_graph_directory) : elimination(elimination), rewards(RewardType::Additions), sort_input(sort_input),
     sort_reducers(sort_reducers), fix_ideal(fix_ideal) {
-    ideal_gen = parse_ideal_dist(ideal_dist);
+    ideal_gen = parse_ideal_dist(ideal_dist, laman_graph_directory);
     }
 
 
@@ -1040,7 +1041,8 @@ void update(std::vector<RingElem>& G,
                                       int N,
                                       int k,
                                       int N_P,
-                                      int N_G): env{ideal_dist, elimination_map.at(elimination), reward_map.at(reward), sort_input, sort_reducers, fix_ideal}, N_P(N_P > 0 ? N_P : N), N_G(N_G > 0 ? N_G : N), k(k) {
+                                      int N_G,
+                                      std::string laman_graph_directory): env{ideal_dist, elimination_map.at(elimination), reward_map.at(reward), sort_input, sort_reducers, fix_ideal, laman_graph_directory}, N_P(N_P > 0 ? N_P : N), N_G(N_G > 0 ? N_G : N), k(k) {
       SPairPriorityStrategy = strategy_map.at(pq_strategy);
       if (this->N_P <= 0 || this->N_G <= 0) {
         throw std::invalid_argument("GLeadMonomialsEnv requires positive N_P and N_G budgets");
@@ -1281,7 +1283,8 @@ void update(std::vector<RingElem>& G,
                   bool sort_input,
                   bool sort_reducers,
                   bool fix_input,
-                  int k): env{ideal_dist, elimination_map.at(elimination), reward_map.at(reward), sort_input, sort_reducers, fix_input}, k(k) {
+                  int k,
+                  std::string laman_graph_directory): env{ideal_dist, elimination_map.at(elimination), reward_map.at(reward), sort_input, sort_reducers, fix_input, laman_graph_directory}, k(k) {
       n = env.nvars();
       cols = 2 * env.nvars() * k;
       g_cols = env.nvars() * k;

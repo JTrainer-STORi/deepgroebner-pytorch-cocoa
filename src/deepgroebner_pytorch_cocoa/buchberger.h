@@ -252,7 +252,8 @@ std::pair<std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector<R
 		  RewardType rewards = RewardType::Reductions,
 		  bool sort_input = false,
 		  bool sort_reducers = true,
-      bool fix_ideal = false);
+      bool fix_ideal = false,
+      std::string laman_graph_directory = "");
 
     /**
      * 
@@ -352,7 +353,8 @@ std::pair<std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector<R
         int N = 100,
         int k = 2,
         int N_P = -1,
-        int N_G = -1);
+        int N_G = -1,
+        std::string laman_graph_directory = "");
 
       GLeadMonomialsEnv(std::string coeff_ring,
         std::string symbols_str,
@@ -433,7 +435,8 @@ std::pair<std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector<R
           bool sort_input = false,
           bool sort_reducers = true,
           bool fix_input = false,
-          int k = 2);
+          int k = 2,
+          std::string laman_graph_directory = "");
 
         NoPQEnv(
           std::string coeff_ring,

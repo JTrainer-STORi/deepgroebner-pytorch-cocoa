@@ -156,7 +156,7 @@ namespace CoCoA
 
   public:
 
-    RangeGeomIdealGenerator(long n_min, long n_max);
+    RangeGeomIdealGenerator(long n_min, long n_max, std::string laman_graph_directory);
 
     ideal next() override;
 
@@ -173,6 +173,7 @@ namespace CoCoA
 
     long n_min;
     long n_max;
+    std::string laman_graph_directory;
     std::mt19937 rng;
     std::uniform_int_distribution<long> n_dist;
 
@@ -187,7 +188,7 @@ namespace CoCoA
      * @param n Numberof vertices of Laman graph.
      */
 
-    GeomIdealGenerator(long n = 6);
+    GeomIdealGenerator(long n, std::string laman_graph_directory);
 
     ideal next() override;
 
@@ -206,6 +207,7 @@ namespace CoCoA
   private:
 
     long n;
+    std::string laman_graph_directory;
     long index;
     GenerationMethod gmethod;
     std::mt19937 rng;
@@ -244,7 +246,10 @@ namespace CoCoA
 
   };
 
-  std::unique_ptr<IdealGenerator> parse_ideal_dist(const std::string& ideal_dist);
+  std::unique_ptr<IdealGenerator> parse_ideal_dist(
+    const std::string& ideal_dist,
+    const std::string& laman_graph_directory = ""
+  );
 
   template<class Iter>
   Iter choice(Iter begin, Iter end, std::mt19937& rng) {

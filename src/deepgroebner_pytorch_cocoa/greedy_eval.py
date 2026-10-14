@@ -22,6 +22,7 @@ from .buchberger_env import (
 )
 from .combined_networks import CombinedPolicyNetwork
 from .model_input_utils import build_model_inputs_from_single_obs
+from .package_resources import laman_graph_path
 from .ppo_normalization import (
     RunningMeanStd,
     normalize_eval_state_features,
@@ -744,13 +745,7 @@ def enumerate_benchmark_distributions(ideal_dist: str) -> list[str] | None:
 
 
 def count_laman_graphs(n: int) -> int:
-    data_path = (
-        pathlib.Path(__file__).resolve().parent
-        / "data"
-        / "LamanGraphs3-10"
-        / f"LamanGraphs{n}.txt"
-    )
-    text = data_path.read_text(encoding="utf-8")
+    text = laman_graph_path(n).read_text(encoding="utf-8")
     return len(re.findall(r"-?\d+", text))
 
 
