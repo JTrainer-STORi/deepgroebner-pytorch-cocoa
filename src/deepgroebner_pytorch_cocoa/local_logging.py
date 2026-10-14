@@ -1,3 +1,5 @@
+"""A simple object for writing run metrics, diagnostics etc."""
+
 from __future__ import annotations
 
 import csv

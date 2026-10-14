@@ -16,11 +16,6 @@
 namespace CoCoA
 {
 
-  // Uses the bars and stars enumeration technique to generate a basis
-  // consisting of all possible monomials of total degree d in n 
-  // variables/indeterminates
-  std::vector<RingElem> basis(int n, int d);
-
   int binomial(int n, int k);
 
   /*
@@ -42,7 +37,7 @@ namespace CoCoA
 
     virtual ~IdealGenerator() {}; // destructor: not really necessary here
 
-    virtual void seed(int seed) {} // currently not implemented, soon will be
+    virtual void seed(int seed) {} 
 
     virtual int nvars() const = 0;
 

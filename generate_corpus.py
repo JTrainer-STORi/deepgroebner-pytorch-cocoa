@@ -1,3 +1,5 @@
+"""Generate a fixed corpus of ideals for evaluation."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,12 +9,17 @@ from typing import Literal
 import tyro
 
 from deepgroebner_pytorch_cocoa.config_dataclasses import Config
-from deepgroebner_pytorch_cocoa.runner import load_training_module
+from deepgroebner_pytorch_cocoa.greedy_eval import (
+    build_greedy_eval_seeds,
+    build_greedy_eval_corpus,
+    save_greedy_eval_corpus,
+    resolve_greedy_eval_corpus,
+)
 
 
 @dataclass
 class CorpusConfig:
-    """Public helper for building fixed greedy-eval corpora."""
+    """Generate a fixed corpus of ideals for evaluation."""
 
     ideal_distribution: str | None = "3-20-10-weighted"
     examples: int = 100
@@ -39,7 +46,9 @@ def _build_internal_config(cli_cfg: CorpusConfig) -> Config:
     cfg.env.rewards = cli_cfg.rewards
     cfg.env.coeff_ring = cli_cfg.coeff_ring
     cfg.env.symbols = cli_cfg.symbols
-    cfg.env.basis_elements = cli_cfg.basis_elements.split(",") if cli_cfg.basis_elements else None
+    cfg.env.basis_elements = (
+        cli_cfg.basis_elements.split(",") if cli_cfg.basis_elements else None
+    )
     cfg.training.hparam_eval_num_examples = cli_cfg.examples
     cfg.training.hparam_eval_seed = cli_cfg.seed
     cfg.training.hparam_eval_interval_steps = 1
@@ -47,18 +56,15 @@ def _build_internal_config(cli_cfg: CorpusConfig) -> Config:
     return cfg
 
 
-def _load_trainer_module():
-    return load_training_module()
-
-
-def main() -> None:
-    cli_cfg = tyro.cli(CorpusConfig)
+def main(args: list[str] | None = None) -> None:
+    cli_cfg = tyro.cli(CorpusConfig, args=args)
     cfg = _build_internal_config(cli_cfg)
-    trainer_module = _load_trainer_module()
-    eval_seeds = trainer_module.build_greedy_eval_seeds(cfg, greedy_eval_enabled=True)
+    eval_seeds = build_greedy_eval_seeds(cfg, greedy_eval_enabled=True)
 
     if not eval_seeds:
-        raise ValueError("No eval seeds were produced. Set `examples` to a positive integer.")
+        raise ValueError(
+            "No eval seeds were produced. Set `examples` to a positive integer."
+        )
 
     if cli_cfg.output_path is not None:
         output_path = Path(cli_cfg.output_path)
@@ -67,14 +73,18 @@ def main() -> None:
                 f"Refusing to overwrite existing corpus file: {output_path}. "
                 "Pass --overwrite True to replace it."
             )
-        corpus_rows = trainer_module.build_greedy_eval_corpus(cfg, eval_seeds)
-        trainer_module.save_greedy_eval_corpus(corpus_rows, output_path)
-        print(f"Wrote greedy eval corpus with {len(corpus_rows)} ideals to {output_path}")
+        corpus_rows = build_greedy_eval_corpus(cfg, eval_seeds)
+        save_greedy_eval_corpus(corpus_rows, output_path)
+        print(
+            f"Wrote greedy eval corpus with {len(corpus_rows)} ideals to {output_path}"
+        )
         return
 
-    corpus_rows, corpus_path, generated = trainer_module.resolve_greedy_eval_corpus(cfg, eval_seeds)
+    corpus_rows, corpus_path, generated = resolve_greedy_eval_corpus(cfg, eval_seeds)
     status = "Generated" if generated else "Loaded"
-    print(f"{status} greedy eval corpus with {len(corpus_rows)} ideals at {corpus_path}")
+    print(
+        f"{status} greedy eval corpus with {len(corpus_rows)} ideals at {corpus_path}"
+    )
 
 
 if __name__ == "__main__":

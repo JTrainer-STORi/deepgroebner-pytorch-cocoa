@@ -1,3 +1,5 @@
+"""dataclasses for actor, critic, training and environment configurations to use with tyro to enable attributes to be changed from the command line"""
+
 from typing import Optional, Literal
 from dataclasses import dataclass, field
 import torch
@@ -9,15 +11,9 @@ class ModelInputs:
   # For most setups, D = 2*E will be true.
 
   P: torch.Tensor = None # [B, N, D]
-  P_idx: torch.Tensor = None # [B, N, 2]
-  P_idx_raw: torch.Tensor = None # [B, N, 2]
   P_mask: torch.Tensor = None # [B, N]
-  P_sugar: torch.Tensor = None # [B, N]
-  P_normal_rank: torch.Tensor = None # [B, N]
   G: torch.Tensor = None # [B, M, E]
   G_mask: torch.Tensor = None # [B, M]
-  G_poly_terms: torch.Tensor = None # [B, M, T, E_term]
-  G_poly_term_mask: torch.Tensor = None # [B, M, T]
   state_features: torch.Tensor = None # [B, F]
   h_value: torch.Tensor = None # [B]
 
@@ -30,16 +26,8 @@ class ModelConfig:
   state_features_embedding_head_in_dim: int | None = field(init=False, default=None) # This will be set in the __post_init__ method based on the shape of the state features in the environment's observation space
 
   # State Embedding Head Related Config
-  state_embedding_head: Literal['deep-set', 'gnn', 'invariant-set-transformer', 'polynomial-rnn-deep-set', None] = 'deep-set' # The type of state embedding head to use
+  state_embedding_head: Literal['deep-set', None] = 'deep-set' # The type of state embedding head to use
   state_embedding_head_out_dim: int = 64 # Out dimension of the state embedding head
-
-  # Polynomial RNN state/shared encoder config
-  polynomial_rnn_cell: Literal['gru', 'lstm'] = 'gru' # Recurrent cell used to encode variable-length polynomial term sequences.
-  polynomial_rnn_hidden_dim: int = 128 # Hidden dimension of the recurrent polynomial encoder.
-  polynomial_rnn_num_layers: int = 1 # Number of recurrent layers in the polynomial encoder.
-  polynomial_rnn_bidirectional: tyro.conf.FlagConversionOff[bool] = True # Whether the recurrent polynomial encoder is bidirectional.
-  polynomial_rnn_dropout: float = 0.0 # Dropout between recurrent layers when polynomial_rnn_num_layers > 1.
-  polynomial_rnn_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to apply layer norm after the recurrent summary projection.
 
   # Deep Set Related Config
   deep_set_phi_n_layers: int = 2 # Number of hidden layers in the phi MLP in the deep set
@@ -53,29 +41,6 @@ class ModelConfig:
   deep_set_rho_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to use layer normalization in the rho MLP in the deep set
   deep_set_pooling: Literal['sum', 'mean', 'sqrt'] = 'mean' # Pooling method for the deep set
   deep_set_post_pool_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to use layer normalization after pooling in the deep set
-
-  # Invariant Set Transformer Related Config
-  invariant_st_hidden_dim: int = 128 # Hidden dimensions for the invariant set transformer
-  invariant_st_num_heads: int = 4 # Number of attention heads for the invariant set transformer
-  invariant_st_num_ab: int = 2 # Number of attention blocks in the invariant set transformer encoder; uses ISAB when num_inds is set, otherwise MAB
-  invariant_st_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to use layer normalization in the invariant set transformer
-  invariant_st_pma_hidden_dim: int = 128 # Hidden dimension for the PMA layer in the invariant set transformer
-  invariant_st_pma_num_heads: int = 4 # Number of attention heads for the PMA layer in the invariant set transformer
-  invariant_st_final_n_layers: int = 2 # Number of hidden layers for the MLP after the PMA layer in the invariant set transformer
-  invariant_st_final_hidden_dims: int = 128 # Shared hidden dimension for the MLP after the PMA layer in the invariant set transformer
-  invariant_st_final_activation: Literal['relu', 'gelu', 'selu', 'tanh'] = 'gelu' # Activation function for the MLP after the PMA layer in the invariant set transformer
-  invariant_st_final_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to use layer normalization for the MLP after the PMA layer in the invariant set transformer
-  invariant_st_num_inds: Optional[int] = 16 # Number of inducing points for ISAB; set to None to use MAB instead
-
-  # GNN Related Config
-  gnn_message_passing_layers: int = 4 # Number of message passing layers in the GNN
-  gnn_n_layers: int = 1 # Number of hidden layers in each GNN MLP
-  gnn_hidden_dims: int = 256 # Shared hidden dimension in each GNN MLP
-  gnn_node_encoding_dim: int = 128 # Node encoding dimension for the GNN
-  gnn_edge_encoding_dim: int = 128 # Edge encoding dimension for the GNN
-  gnn_activation: Literal['relu', 'gelu', 'selu', 'tanh'] = 'gelu' # Activation function for the GNN
-  gnn_layer_norm_mlp: tyro.conf.FlagConversionOff[bool] = True # Whether to use layer normalization in the GNN MLP
-  gnn_make_undirected: tyro.conf.FlagConversionOff[bool] = False # Whether to make the GNN undirected
 
   # State Features Embedding Head Related Config
   state_features_embedding_head: Literal['mlp', None] = 'mlp' # The type of state features embedding head to use
@@ -110,15 +75,13 @@ class ModelConfig:
 class ActorConfig(ModelConfig):
   """Configuration options for the Actor network."""
 
+  state_embedding_head: Literal['deep-set', None] = None # Optional global basis encoder; disabled for pair-only policies.
+  state_features_embedding_head: Literal['mlp', None] = None # Optional encoder for handcrafted state features.
+
   pair_embedding_head_in_dim: int | None = field(init=False, default=None) # This will be set in the __post_init__ method based on the shape of the pair set P in the environment's observation space
 
-  share_polynomial_encoder_between_heads: tyro.conf.FlagConversionOff[bool] = False # Whether to share the item/polynomial encoder between the state head and pair embedding head.
-  shared_polynomial_encoder_type: Literal['mlp', 'rnn'] = 'mlp' # Which encoder to use for the shared polynomial backbone.
-  pair_combiner: Literal['sqa', 'film', 'concat', 'cross-attn', 'basis-cross-attn', 'bipartite-mp', 'pair-only'] = 'film' # Which type of combiner to use when combining the pair and pair state heads; `basis-cross-attn` lets each pair attend directly to all visible basis elements, while `pair-only` is for setups where state is only used upstream, e.g. for routing a pair head.
-  cross_attn_num_heads: int = 4 # Number of attention heads for the cross-attention pair combiner.
-  cross_attn_post_attn_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to apply layer norm after residual cross-attention update in pair combiner.
-  bipartite_hidden_dim: int = 128 # Hidden dimension used by the bipartite message passing pair combiner.
-  bipartite_layers: int = 3 # Number of alternating G->P and P->G message passing layers in bipartite combiner.
+  pair_combiner: Literal['sqa', 'film', 'concat'] = 'film' # How state conditions pair scores; ignored when both state heads are disabled.
+
   # Single Query Attention Related Config
   single_query_attention_dim: int = 128 # The dimension to use for the single query attention mechanism when the pair combiner is set to 'sqa'
   single_query_attention_n_glimpses: int  = 0 # The number of glimpses to use for the single query attention mechanism
@@ -127,7 +90,7 @@ class ActorConfig(ModelConfig):
   single_query_attention_norm_qk: tyro.conf.FlagConversionOff[bool] = False # Whether to use normalization on the query and key vectors in the single query attention
 
   # Pair Embedding Head Related Config
-  pair_embedding_head: Literal['per-entity-mlp', 'symmetric-per-entity-mlp', 'moe-symmetric-per-entity-mlp', 'equivariant-set-transformer', 'equivariant-pairset-gnn', None] = 'symmetric-per-entity-mlp' # The type of pair embedding head to use
+  pair_embedding_head: Literal['per-entity-mlp', 'symmetric-per-entity-mlp', 'alphastar-buchberger-pair-transformer'] = 'symmetric-per-entity-mlp' # The type of pair embedding head to use
   pair_embedding_head_n_layers: int = 2 # Number of hidden layers in MLPs in pair embedding head
   pair_embedding_head_hidden_dims: int = 128 # Shared hidden dimension in MLPs in pair embedding head
   pair_embedding_head_out_dim: int = 64 # Out dimension of the pair embedding head
@@ -136,13 +99,6 @@ class ActorConfig(ModelConfig):
   pair_scoring_head_activation: Literal['identity', 'relu', 'gelu', 'selu', 'tanh'] = 'gelu' # Activation used before the final scalar scorer in pair-only/no-state policy heads
   pair_scoring_head_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to apply layer normalization before the final scalar scorer in pair-only/no-state policy heads
   use_lcm_gcd: tyro.conf.FlagConversionOff[bool] = True # Whether to use Lowest Common Multiple/Greatest Common Divisor features in pair embedding head
-  
-  moe_num_experts: int = 4 # Number of symmetric per-entity MLP experts used by the routed MoE pair embedding head.
-  moe_top_k: int = 2 # Number of experts selected per state by the routed MoE pair embedding head. Set to 1 or 2 for sparse MoE-style routing.
-  moe_router_n_layers: int = 1 # Number of hidden layers in the state-conditioned router MLP for the routed MoE pair embedding head.
-  moe_router_hidden_dims: int = 128 # Shared hidden dimension in the routed MoE router MLP.
-  moe_router_activation: Literal['relu', 'gelu', 'selu', 'tanh'] = 'gelu' # Activation used in the routed MoE router MLP.
-  moe_router_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to use layer normalization in the routed MoE router MLP.
 
   # config related to the item encoding in the SymmetricPerEntityMLP
   item_embedding_head_n_layers: int = 2 # Number of hidden layers in MLPs in item embedding head
@@ -151,33 +107,24 @@ class ActorConfig(ModelConfig):
   item_embedding_head_activation: Literal['relu', 'gelu', 'selu', 'tanh'] = 'gelu' # Activations used in MLPs in item embedding head
   item_embedding_head_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to use layer normalization in MLPs in item embedding head
 
-  # Equivariant Set Transformer Related Config
-  equivariant_st_hidden_dim: int = 128 # Hidden dimensions for the equivariant set transformer
-  equivariant_st_num_heads: int = 4 # Number of attention heads for the equivariant set transformer
-  equivariant_st_num_ab: int = 2 # Number of attention blocks in the equivariant set transformer encoder; applies to ISAB or MAB depending on encoder type
-  equivariant_st_layer_norm: tyro.conf.FlagConversionOff[bool] = False # Whether to use layer normalization in the equivariant set transformer
-  equivariant_st_final_n_layers: int = 2 # Number of hidden layers for the MLP after the PMA layer in the equivariant set transformer
-  equivariant_st_final_hidden_dims: int = 128 # Shared hidden dimension for the MLP after the PMA layer in the equivariant set transformer
-  equivariant_st_final_activation: Literal['relu', 'gelu', 'selu', 'tanh'] = 'gelu' # Activation function for the MLP after the PMA layer in the equivariant set transformer
-  equivariant_st_final_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to use layer normalization for the MLP after the PMA layer in the equivariant set transformer
-  equivariant_st_num_inds: Optional[int] = 16 # Number of inducing points for ISAB; set to None to use MAB instead
-
-  # Arguments for the equivariant pairset gnn
-  pair_gnn_make_undirected: tyro.conf.FlagConversionOff[bool] = False # Whether to make the pairset GNN undirected by adding reverse edges
-  pair_gnn_n_layers: int = 1 # Number of hidden layers in pairset GNN MLPs
-  pair_gnn_hidden_dims: int = 128 # Shared hidden dimension in pairset GNN MLPs
-  pair_gnn_node_embedding_dim: int = 128 # Node embedding dimension for the pairset GNN
-  pair_gnn_activation: Literal['relu', 'gelu', 'selu', 'tanh'] = 'gelu' # Activation function for the pairset GNN
-  pair_gnn_layer_norm_mlp: tyro.conf.FlagConversionOff[bool] = False # Whether to use layer normalization in the MLPs in the pairset GNN
-  pair_gnn_n_heads: int = 4 # Number of attention heads for the pairset GNN, if using a GAT-based architecture
-  pair_gnn_message_passing_layers: int = 4 # Number of message passing layers for the pairset GNN
+  # AlphaStar-style pair transformer config
+  alphastar_pair_transformer_num_layers: int = 3 # Number of masked self-attention layers over the visible pair set.
+  alphastar_pair_transformer_num_heads: int = 2 # Number of attention heads in the AlphaStar-style pair transformer.
+  alphastar_pair_transformer_num_resblocks_before: int = 2 # Number of per-pair residual MLP blocks before self-attention.
+  alphastar_pair_transformer_num_resblocks_after: int = 2 # Number of per-pair residual MLP blocks after self-attention.
+  alphastar_pair_transformer_resblock_hidden_dim: int = 128 # Hidden dimension used inside the per-pair residual MLP blocks.
+  alphastar_pair_transformer_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to use layer normalization in AlphaStar-style pair transformer blocks.
+  alphastar_buchberger_basis_encoder_n_layers: int = 1 # Number of hidden layers in the shared endpoint encoder used to build Buchberger-specific pair tokens from P.
+  alphastar_buchberger_basis_encoder_hidden_dims: int = 128 # Hidden dimension in the shared endpoint encoder used by the Buchberger-specific AlphaStar pair transformer.
+  alphastar_buchberger_basis_encoder_activation: Literal['relu', 'gelu', 'selu', 'tanh'] = 'gelu' # Activation used in the shared endpoint encoder for Buchberger-specific pair tokens.
+  alphastar_buchberger_basis_encoder_layer_norm: tyro.conf.FlagConversionOff[bool] = True # Whether to use layer norm in the shared endpoint encoder for Buchberger-specific pair tokens.
 
 @dataclass
 class CriticConfig(ModelConfig):
   """Configuration options for the Critic network."""
   
   # value head related config
-  value_function_heuristic: Literal["random", "first", "degree", "normal", "sugar", "policy-mimic"] = "degree" # The heuristic to use for the critic's value estimates. When the critic strategy is `heuristic-only` or `heuristic-plus-learned-residual`
+  value_function_heuristic: Literal["random", "first", "degree", "normal", "sugar"] = "degree" # The heuristic to use for the critic's value estimates. When the critic strategy is `heuristic-only` or `heuristic-plus-learned-residual`
   critic_strategy: Literal["heuristic-only", "heuristic-plus-learned-residual", "learned-only"] = "heuristic-plus-learned-residual" # The strategy to use for the critic's value estimates. "heuristic-only" uses only a heuristic value based on the number of pairs and basis elements, "learned-only" uses only the learned value function, and "heuristic-plus-learned" combines both by adding the heuristic value to the learned value function's output.
   value_head_n_layers: int = 2 # Number of hidden layers for MLP in value head
   value_head_hidden_dims: int = 128 # Shared hidden dimension for MLP in value head
@@ -192,7 +139,7 @@ class EnvConfig:
   env_seed: int = 12 # The seed for the environment's random number generator, which controls the sampling of ideals and other stochastic aspects of the environment. Setting this to a fixed value can help ensure reproducibility across runs.
   elimination: Literal["gebauermoeller", "lcm", "none"] = "gebauermoeller" # The elimination strategy to use in the environment.
   rewards: Literal["additions", "reductions"] = "additions" # Whether to use a reward signal based on the number of additions or reductions.
-  priority_queue_strategy: Literal["first", "last", "random", "degree", "normal", "sugar", "policy-mimic"] = "degree" # The strategy to use for ordering the priority queue which determines which N pairs are included in the agent's observation.
+  priority_queue_strategy: Literal["first", "last", "random", "degree", "normal", "sugar"] = "degree" # The strategy to use for ordering the priority queue which determines which N pairs are included in the agent's observation.
   sort_input: tyro.conf.FlagConversionOff[bool] = False # Whether to sort the input polynomials to Buchberger's algorithm by leading monomial
   sort_reducers: tyro.conf.FlagConversionOff[bool] = True # Whether to sort the reducers in the reduction step of Buchberger's algorithm by leading monomial
   fix_ideal: tyro.conf.FlagConversionOff[bool] = False # Whether to fix the ideal across episodes, useful for evaluation
@@ -221,7 +168,7 @@ class TrainingConfig:
   normalize_reward: tyro.conf.FlagConversionOff[bool] = False # Whether to normalize rewards online using running statistics of discounted returns.
   reward_normalization_epsilon: float = 1e-8 # Numerical stability epsilon used in reward normalization.
   reward_normalization_clip: float = 0.0 # Clip range applied after reward normalization. Set <= 0 to disable clipping.
-  normalize_observation_state_features: bool = True # Whether to normalize only the floating-point `state_features` observation key.
+  normalize_observation_state_features: tyro.conf.FlagConversionOff[bool] = True # Whether to normalize only the floating-point `state_features` observation key.
   observation_normalization_epsilon: float = 1e-8 # Numerical stability epsilon used in state_features observation normalization.
   observation_normalization_clip: float = 10.0 # Clip range applied after state_features normalization. Set <= 0 to disable clipping.
   clip_coef: float = 0.1 # The clipping coefficient for PPO
@@ -230,7 +177,6 @@ class TrainingConfig:
   entropy_coefficient: float = 0.01 # The coefficient for the entropy bonus, which encourages exploration by adding a term to the loss that is proportional to the entropy of the policy's action distribution.
   normalize_masked_action_entropy: tyro.conf.FlagConversionOff[bool] = False # Whether to normalize the entropy bonus by log(number of valid actions) in masked-action states.
   critic_loss_coefficient: float = 0.1 # The coefficient for the value loss term in the overall loss function used for training. 
-  share_actor_critic_trunk: tyro.conf.FlagConversionOff[bool] = False # Whether to share the actor's and critic's state-side trunk modules (state embedding, optional state-feature embedding, and state combiner).
   clip_grad_norm_actor: tyro.conf.FlagConversionOff[bool] = True # Whether to apply gradient norm clipping to actor parameters.
   clip_grad_norm_critic: tyro.conf.FlagConversionOff[bool] = True # Whether to apply gradient norm clipping to critic parameters.
   max_grad_norm_actor: float = 0.5 # The maximum gradient norm for the actor (policy) network, used for gradient clipping to help stabilize training.
@@ -241,12 +187,7 @@ class TrainingConfig:
   pytorch_num_threads: Optional[int] = None # Optional override for PyTorch intra-op CPU thread pool size (torch.set_num_threads). If None, PyTorch default/thread env vars are used.
   pytorch_num_interop_threads: Optional[int] = None # Optional override for PyTorch inter-op CPU thread pool size (torch.set_num_interop_threads). If None, PyTorch default is used.
   cuda: tyro.conf.FlagConversionOff[bool] = True # Whether to use CUDA (GPU) for training if available.
-  enable_torch_compile: tyro.conf.FlagConversionOff[bool] = False # Whether to enable torch.compile for actor/critic training forward passes.
-  torch_compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default" # torch.compile mode; use "default" to defer to PyTorch defaults.
-  torch_compile_backend: str = "inductor" # Backend passed to torch.compile.
-  torch_compile_fullgraph: tyro.conf.FlagConversionOff[bool] = False # Whether to require full-graph capture in torch.compile.
-  torch_compile_dynamic: tyro.conf.FlagConversionOff[bool] = False # Whether to enable dynamic-shape support in torch.compile.
-  track: tyro.conf.FlagConversionOff[bool] = True # Whether to track the experiment with Weights and Biases (wandb). If True, make sure to set up wandb with your project and API key.
+  track: tyro.conf.FlagConversionOff[bool] = False # Whether to track the experiment with Weights and Biases (wandb). If True, make sure to set up wandb with your project and API key.
   console_verbosity: Literal["quiet", "normal", "verbose"] = "normal" # Controls trainer terminal output. Use "quiet" for minimal logs, "normal" for update summaries, or "verbose" for config/model dumps and eval progress details.
   wandb_project: str = "ppo-implementation-details" # The name of the Weights and Biases project to use for tracking this experiment.
   wandb_entity: Optional[str] = None # The name of the Weights and Biases entity (team) to use for tracking this experiment. If None, it will default to your personal account.
@@ -264,7 +205,7 @@ class TrainingConfig:
   hparam_eval_num_examples: int = 100 # Number of fixed evaluation episodes used for the greedy hyperparameter metric. Set <= 0 to disable.
   hparam_eval_seed: int = 10_000 # Base seed for fixed evaluation examples; episode i uses seed hparam_eval_seed + i.
   hparam_eval_on_train_env: tyro.conf.FlagConversionOff[bool] = True # Whether to run fixed greedy evaluation on the main training env. When explicitly set, this works independently from NoPQ evaluation.
-  hparam_eval_on_nopq_env: tyro.conf.FlagConversionOff[bool] = True # Whether to run fixed greedy evaluation on the configured NoPQ env. When explicitly set, this works independently from main-env evaluation.
+  hparam_eval_on_nopq_env: tyro.conf.FlagConversionOff[bool] = False # Whether to run fixed greedy evaluation on the configured NoPQ env. When explicitly set, this works independently from main-env evaluation.
   hparam_eval_nopq_gym_id: str = "BuchbergerExponentsNoPQ-v1" # Gym id used when evaluating on the NoPQ environment.
   hparam_eval_progress_interval_seconds: float = 30.0 # Seconds between progress messages while greedy evaluation is running. Set <= 0 to disable.
   hparam_eval_max_pairs_processed_multiplier: Optional[float] = None # Legacy no-op. Retained only for backwards-compatible CLI/config loading; greedy eval no longer truncates on processed-pair budgets.
@@ -281,9 +222,9 @@ class TrainingConfig:
   gamma: float = 0.99 # The discount factor for future rewards in reinforcement learning.
   gae_lambda: float = 0.95 # The lambda parameter for Generalized Advantage Estimation (GAE). 
   vectorization_mode: Literal["sync", "async"] = "async" # The mode to use for vectorizing the environments during training. "sync" runs multiple environment copies in the same process, "async" runs each environment copy in a seperate process which can lead to big speedups when many CPU cores are available.
-  counterfactual_diagnostic_frequency: int = 20 # How often (in terms of number of updates) to run the counterfactual diagnostic function during training. Set this to 0 to disable the counterfactual diagnostic.
-  gradient_sensitivity_diagnostic_frequency: int = 100 # How often (in terms of number of updates) to run the gradient sensitivity diagnostic function during training. Set this to 0 to disable the gradient sensitivity diagnostic.
-  ranking_diagnostic_frequency: int = 20 # How often (in terms of number of updates) to run policy-vs-heuristic ranking diagnostics. Set this to 0 to disable.
+  counterfactual_diagnostic_frequency: int = 0 # How often (in terms of number of updates) to run the counterfactual diagnostic function during training. Set this to 0 to disable the counterfactual diagnostic.
+  gradient_sensitivity_diagnostic_frequency: int = 0 # How often (in terms of number of updates) to run the gradient sensitivity diagnostic function during training. Set this to 0 to disable the gradient sensitivity diagnostic.
+  ranking_diagnostic_frequency: int = 0 # How often (in terms of number of updates) to run policy-vs-heuristic ranking diagnostics. Set this to 0 to disable.
 
 @dataclass
 class Config:

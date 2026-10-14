@@ -75,8 +75,10 @@ jobs:
 
       - name: Run installation smoke tests
         run: |
-          deepgroebner-pytorch-cocoa-verify
-          pytest tests/test_runner.py
+          python run_training.py --help
+          python generate_corpus.py --help
+          python evaluate_model.py --help
+          python -m pytest -q
 
   install-standard-system-location:
     name: Install with standard /usr/local CoCoALib layout (Python 3.12)
@@ -117,5 +119,7 @@ jobs:
 
       - name: Run installation smoke tests
         run: |
-          deepgroebner-pytorch-cocoa-verify
-          pytest tests/test_runner.py
+          python run_training.py --help
+          python generate_corpus.py --help
+          python evaluate_model.py --help
+          python -m pytest -q

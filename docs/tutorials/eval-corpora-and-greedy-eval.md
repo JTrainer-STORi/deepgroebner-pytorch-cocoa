@@ -29,16 +29,10 @@ When a run asks for the same distribution, base seed, and number of examples aga
 
 ## Generate A Corpus
 
-The public helper command is:
+After installing the package, run the scripts from the repository root using the Python environment where you installed it. Generate a corpus with:
 
 ```bash
-deepgroebner-pytorch-cocoa-make-corpus
-```
-
-If your shell does not expose that script on `PATH`, the equivalent fallback is:
-
-```bash
-python -m deepgroebner_pytorch_cocoa.corpus_cli
+python generate_corpus.py
 ```
 
 The most important options are:
@@ -55,7 +49,7 @@ The most important options are:
 Generate a cached corpus for the default weighted distribution:
 
 ```bash
-deepgroebner-pytorch-cocoa-make-corpus \
+python generate_corpus.py \
   --ideal-distribution 3-20-10-weighted \
   --examples 100 \
   --seed 10000
@@ -64,7 +58,7 @@ deepgroebner-pytorch-cocoa-make-corpus \
 Generate a cached corpus for a geometric distribution:
 
 ```bash
-deepgroebner-pytorch-cocoa-make-corpus \
+python generate_corpus.py \
   --ideal-distribution 'geom-(3-5)' \
   --examples 50 \
   --seed 10000
@@ -73,7 +67,7 @@ deepgroebner-pytorch-cocoa-make-corpus \
 Generate a cached corpus for a benchmark family:
 
 ```bash
-deepgroebner-pytorch-cocoa-make-corpus \
+python generate_corpus.py \
   --ideal-distribution 'cyclic-(3-6)' \
   --examples 50 \
   --seed 10000
@@ -82,7 +76,7 @@ deepgroebner-pytorch-cocoa-make-corpus \
 Generate a cached corpus for a mixed benchmark family:
 
 ```bash
-deepgroebner-pytorch-cocoa-make-corpus \
+python generate_corpus.py \
   --ideal-distribution '(cyclic+eco)-(3-6)' \
   --examples 50 \
   --seed 10000
@@ -91,7 +85,7 @@ deepgroebner-pytorch-cocoa-make-corpus \
 Write the corpus to a specific file instead of the default cache location:
 
 ```bash
-deepgroebner-pytorch-cocoa-make-corpus \
+python generate_corpus.py \
   --ideal-distribution 'geom-(3-5)' \
   --examples 30 \
   --seed 10000 \
@@ -102,21 +96,21 @@ deepgroebner-pytorch-cocoa-make-corpus \
 
 The supported public evaluation workflow today is training-time greedy evaluation. The trainer either loads a matching cached corpus or generates one automatically before the first evaluation round.
 
-In the examples below, `spem-deep-set` is used as the default public training preset. You can swap in `symmetric-per-entity-mlp` for the lean pair-only setup or `spem-deep-set-state-features` for the fullest curated state-conditioned setup.
+The training examples below explicitly enable a Deep Set state head. Omit that option for the default SPEM actor without state heads, or add `--actor.state-features-embedding-head mlp` to include handcrafted features.
 
 ### Train-Environment Evaluation
 
 Enable fixed-corpus evaluation on the same environment used for training:
 
 ```bash
-deepgroebner-pytorch-cocoa-train \
-  --architecture spem-deep-set \
-  --ideal-distribution 'cyclic-(3-6)' \
-  --total-timesteps 1000000 \
-  --greedy-eval-interval-steps 100000 \
-  --greedy-eval-examples 50 \
-  --track False \
-  --verbosity normal
+python run_training.py \
+  --actor.state-embedding-head deep-set \
+  --env.ideal-dist 'cyclic-(3-6)' \
+  --training.total-timesteps 1000000 \
+  --training.hparam-eval-interval-steps 100000 \
+  --training.hparam-eval-num-examples 50 \
+  --training.track False \
+  --training.console-verbosity normal
 ```
 
 That will periodically report metrics such as:
@@ -134,24 +128,24 @@ and it will write the same values into the local scalar logs.
 If you generated the corpus ahead of time with the same distribution, seed, and example count, the training run will reuse it automatically:
 
 ```bash
-deepgroebner-pytorch-cocoa-make-corpus \
+python generate_corpus.py \
   --ideal-distribution 'cyclic-(3-6)' \
   --examples 50 \
   --seed 10000
 
-deepgroebner-pytorch-cocoa-train \
-  --architecture spem-deep-set \
-  --ideal-distribution 'cyclic-(3-6)' \
-  --greedy-eval-interval-steps 100000 \
-  --greedy-eval-examples 50
+python run_training.py \
+  --actor.state-embedding-head deep-set \
+  --env.ideal-dist 'cyclic-(3-6)' \
+  --training.hparam-eval-interval-steps 100000 \
+  --training.hparam-eval-num-examples 50
 ```
 
 ### Evaluate On The NoPQ Environment Too
 
-The small public wrapper currently keeps evaluation simple and only enables train-environment greedy eval by default. To evaluate against the NoPQ environment too, call the trainer directly:
+Training enables train-environment greedy evaluation by default. To evaluate against NoPQ too, set the following options using `python run_training.py`:
 
 ```bash
-python -m deepgroebner_pytorch_cocoa.ppo_masked \
+python run_training.py \
   --env.gym_id=BuchbergerExponents-v1 \
   --env.ideal_dist='cyclic-(3-6)' \
   --training.total_timesteps=1000000 \
@@ -177,28 +171,28 @@ In that mode the trainer computes:
 
 ## Tracking Evaluation Results
 
-With `--track False`, greedy-eval metrics are written locally into:
+With `--training.track False`, greedy-eval metrics are written locally into:
 
 - `scalars.jsonl`
 - `scalars.csv`
 
-When `--track True` and `wandb` is installed, the same metrics are mirrored into Weights & Biases.
+When `--training.track True` and `wandb` is installed, the same metrics are mirrored into Weights & Biases.
 
 Example:
 
 ```bash
-deepgroebner-pytorch-cocoa-train \
-  --architecture spem-deep-set \
-  --ideal-distribution 'geom-(3-5)' \
-  --greedy-eval-interval-steps 100000 \
-  --greedy-eval-examples 50 \
-  --track True
+python run_training.py \
+  --actor.state-embedding-head deep-set \
+  --env.ideal-dist 'geom-(3-5)' \
+  --training.hparam-eval-interval-steps 100000 \
+  --training.hparam-eval-num-examples 50 \
+  --training.track True
 ```
 
-If you want explicit W&B project or group settings, use the trainer directly:
+W&B project and group settings are available through the training script:
 
 ```bash
-python -m deepgroebner_pytorch_cocoa.ppo_masked \
+python run_training.py \
   --env.gym_id=BuchbergerExponents-v1 \
   --env.ideal_dist='geom-(3-5)' \
   --training.total_timesteps=1000000 \
@@ -219,7 +213,7 @@ python -m deepgroebner_pytorch_cocoa.ppo_masked \
 The standalone command for offline corpus evaluation is:
 
 ```bash
-deepgroebner-pytorch-cocoa-eval-corpus
+python evaluate_model.py
 ```
 
 The most important options are:
@@ -234,7 +228,7 @@ The most important options are:
 Evaluate a saved checkpoint on a fixed corpus in the NoPQ environment:
 
 ```bash
-deepgroebner-pytorch-cocoa-eval-corpus \
+python evaluate_model.py \
   --corpus eval_corpora/greedy_eval/BuchbergerExponents-v1__cyclic-(3-6)__seed10000__n50.jsonl \
   --model-name models/actors/my_run.pt \
   --gym-id BuchbergerExponentsNoPQ-v1
@@ -243,7 +237,7 @@ deepgroebner-pytorch-cocoa-eval-corpus \
 Evaluate the best greedy-eval checkpoint resolved by partial name:
 
 ```bash
-deepgroebner-pytorch-cocoa-eval-corpus \
+python evaluate_model.py \
   --corpus eval_corpora/greedy_eval/BuchbergerExponents-v1__cyclic-(3-6)__seed10000__n50.jsonl \
   --model-name j77pf3uu \
   --models-dir models/actors \

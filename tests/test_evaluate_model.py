@@ -6,7 +6,7 @@ import torch
 
 from deepgroebner_pytorch_cocoa.combined_networks import CombinedPolicyNetwork
 from deepgroebner_pytorch_cocoa.config_dataclasses import ActorConfig, ModelInputs
-from deepgroebner_pytorch_cocoa.eval_corpus_cli import (
+from evaluate_model import (
     _build_queue_usage_summary,
     _compute_queue_usage_stats,
     _extract_run_id,
@@ -45,12 +45,11 @@ def test_resolve_corpus_symbols_handles_geom_style_names():
     assert _resolve_corpus_symbols(rows) == "x2,x3,x4,x5,y3,y4,y5"
 
 
-def test_load_actor_auto_detects_legacy_pair_scoring_head(tmp_path):
+def test_load_actor_round_trips_current_pair_scoring_head(tmp_path):
     actor_cfg_dict = {
         "state_embedding_head": None,
         "state_features_embedding_head": None,
         "pair_embedding_head": "symmetric-per-entity-mlp",
-        "pair_combiner": "pair-only",
         "use_lcm_gcd": False,
         "pair_embedding_head_out_dim": 8,
         "item_embedding_head_out_dim": 6,
@@ -60,12 +59,9 @@ def test_load_actor_auto_detects_legacy_pair_scoring_head(tmp_path):
     actor_cfg.state_features_embedding_head_in_dim = 4
     actor_cfg.pair_embedding_head_in_dim = 6
 
-    legacy_actor = CombinedPolicyNetwork(
-        actor_cfg,
-        legacy_pair_scoring_head=True,
-    )
-    checkpoint_path = tmp_path / "legacy_actor.pt"
-    torch.save(legacy_actor.state_dict(), checkpoint_path)
+    original_actor = CombinedPolicyNetwork(actor_cfg).eval()
+    checkpoint_path = tmp_path / "actor.pt"
+    torch.save(original_actor.state_dict(), checkpoint_path)
 
     env = SimpleNamespace(
         observation_space={
@@ -81,27 +77,26 @@ def test_load_actor_auto_detects_legacy_pair_scoring_head(tmp_path):
         torch.device("cpu"),
     )
 
-    assert isinstance(loaded_actor.final_module, torch.nn.Linear)
+    assert isinstance(loaded_actor.final_module, torch.nn.Sequential)
 
     inputs = ModelInputs(
         P=torch.tensor(
-            [[[1.0, 0.0, 2.0, 0.0, 1.0, 1.0],
-              [0.0, 1.0, 1.0, 1.0, 0.0, 2.0],
-              [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]]
+            [
+                [
+                    [1.0, 0.0, 2.0, 0.0, 1.0, 1.0],
+                    [0.0, 1.0, 1.0, 1.0, 0.0, 2.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ]
+            ]
         ),
-        P_idx=torch.tensor([[[0, 1], [1, 0], [2, 0]]]),
         P_mask=torch.tensor([[True, True, False]]),
-        G=torch.tensor(
-            [[[1.0, 0.0, 2.0],
-              [0.0, 1.0, 1.0],
-              [2.0, 1.0, 0.0]]]
-        ),
+        G=torch.tensor([[[1.0, 0.0, 2.0], [0.0, 1.0, 1.0], [2.0, 1.0, 0.0]]]),
         G_mask=torch.tensor([[True, True, True]]),
         state_features=torch.randn(1, 4),
     )
 
     with torch.no_grad():
-        torch.testing.assert_close(loaded_actor(inputs), legacy_actor(inputs))
+        torch.testing.assert_close(loaded_actor(inputs), original_actor(inputs))
 
 
 def test_resolve_model_path_filters_best_greedy_eval_vs_final(tmp_path):
@@ -112,8 +107,14 @@ def test_resolve_model_path_filters_best_greedy_eval_vs_final(tmp_path):
     best_path.touch()
     final_path.touch()
 
-    assert _resolve_model_path("abc123", models_dir, checkpoint_type="best_greedy_eval") == best_path.resolve()
-    assert _resolve_model_path("abc123", models_dir, checkpoint_type="final") == final_path.resolve()
+    assert (
+        _resolve_model_path("abc123", models_dir, checkpoint_type="best_greedy_eval")
+        == best_path.resolve()
+    )
+    assert (
+        _resolve_model_path("abc123", models_dir, checkpoint_type="final")
+        == final_path.resolve()
+    )
 
 
 def test_extract_run_id_handles_best_greedy_eval_suffix():

@@ -18,8 +18,11 @@
 #include "ideals.h"
 
 namespace CoCoA {
+
+  // The following helper functions are used when the ideal input is specified using the command line or a jsonl file 
   namespace {
 
+    // This function removes any white space from the beginning and/or end of an input string
     std::string trim_copy(const std::string& s) {
       size_t begin = 0;
       while (begin < s.size() && std::isspace(static_cast<unsigned char>(s[begin]))) ++begin;
@@ -28,6 +31,7 @@ namespace CoCoA {
       return s.substr(begin, end - begin);
     }
 
+    // This function is used to translate from a polynomial ring specified using a string to the corresponding ring object in CoCoALib
     ring parse_coeff_ring(const std::string& coeff_ring_str) {
       const std::string s = trim_copy(coeff_ring_str);
       if (s == "QQ") return RingQQ();
@@ -43,6 +47,7 @@ namespace CoCoA {
       throw std::invalid_argument("Unsupported coeff_ring: " + s + ". Supported: QQ, ZZ, ZZmod(p)");
     }
 
+    // function for translating an ideal specified using strings into a CoCoALib Ideal object
     ideal parse_fixed_ideal(const std::string& coeff_ring_str,
                             const std::string& symbols_str,
                             const std::vector<std::string>& basis_strs,
@@ -87,57 +92,10 @@ namespace CoCoA {
     {"degree", SelectionType::Degree},
     {"normal", SelectionType::Normal},
     {"sugar",  SelectionType::Sugar},
-    {"policy-mimic", SelectionType::PolicyMimic},
     {"random", SelectionType::Random},
   };
 
-  namespace {
-
-    int leading_overlap_degree(const SPair& p, const std::vector<RingElem>& G) {
-      const int deg_i = deg(LPP(G[p.i]));
-      const int deg_j = deg(LPP(G[p.j]));
-      return deg_i + deg_j - p.lcmdeg;
-    }
-
-    std::vector<long> kth_lead_exponents(ConstRefRingElem f, int term_index, long n_vars) {
-      std::vector<long> exps(static_cast<std::size_t>(std::max<long>(n_vars, 0)), 0);
-      SparsePolyIter it = BeginIter(f);
-      for (int idx = 0; idx < term_index && !IsEnded(it); ++idx) {
-        ++it;
-      }
-      if (IsEnded(it)) {
-        return exps;
-      }
-
-      std::vector<long> raw_exps;
-      exponents(raw_exps, PP(it));
-      for (long var_idx = 0; var_idx < std::min<long>(n_vars, static_cast<long>(raw_exps.size())); ++var_idx) {
-        exps[static_cast<std::size_t>(var_idx)] = raw_exps[static_cast<std::size_t>(var_idx)];
-      }
-      return exps;
-    }
-
-    std::vector<long> kth_pair_lcm_exponents(const SPair& p, const std::vector<RingElem>& G, int term_index) {
-      const long n_vars = NumIndets(owner(G[p.i]));
-      const std::vector<long> exps_i = kth_lead_exponents(G[p.i], term_index, n_vars);
-      const std::vector<long> exps_j = kth_lead_exponents(G[p.j], term_index, n_vars);
-      std::vector<long> lcm_exps(exps_i.size(), 0);
-      for (std::size_t idx = 0; idx < lcm_exps.size(); ++idx) {
-        lcm_exps[idx] = std::max(exps_i[idx], exps_j[idx]);
-      }
-      return lcm_exps;
-    }
-
-    int total_degree_from_exponents(const std::vector<long>& exps) {
-      long total = 0;
-      for (long exp : exps) {
-        total += exp;
-      }
-      return static_cast<int>(total);
-    }
-
-  } // namespace
-
+  // function to quickly output all of the current state feature values
   inline std::ostream& print_pretty(std::ostream& os,
                                   const state_features& f)
   {
@@ -158,6 +116,7 @@ namespace CoCoA {
       return os;
   }
 
+  // converts from the state_features type to a vector of floats for passing to RL agent
   std::vector<float> state_features_to_vector(const state_features& s) {
     return {
         static_cast<float>(s.G_cardinality),
@@ -180,6 +139,7 @@ namespace CoCoA {
     };
 }
 
+  // helper for quickly updating some of the state features when the step function of the environment is called
   static void update_running_stats(
     double x,
     int& count,
@@ -193,11 +153,13 @@ namespace CoCoA {
     M2 += delta * delta2;
   }
 
+  // Resets the values stored in the feature tracker for a new run
   void FeatureTracker::reset(state_features& f) {
       *this = FeatureTracker(); // reset internal stats
       f = state_features();     // reset features
   }
 
+  // Updates the appropriate state features upon removal of a pair from the pair set
   void FeatureTracker::on_pair_removed(
     const SPair& pair,
     state_features& f)
@@ -225,7 +187,7 @@ namespace CoCoA {
 
   }
 
-
+  // updates the appropriate state features when the pairset is updated through elimination criteria
   void FeatureTracker::on_update(
     const RingElem& g,
     const std::vector<SPair>& new_pairs,
@@ -263,6 +225,7 @@ namespace CoCoA {
     f.n_pairs_pruned += n_pairs_pruned;
   }
 
+  // updates state features once the environment step is complete
   void FeatureTracker::on_step_completed(state_features& f)
 {
     // ---------- pair density ----------
@@ -279,13 +242,13 @@ namespace CoCoA {
     }
 
     // NOTE:
-    // steps_since_basis_update is managed by the environment:
+    // the steps_since_basis_update feature is managed by the environment:
     //   - incremented at step start
     //   - reset to 0 when basis grows
 }
 
 
-
+  // This function is used with the random priority queue to select up to num_random elements in a random order
   template <class InputIt, class RNG>
   std::vector<typename std::iterator_traits<InputIt>::value_type>
   random_unique(InputIt begin, InputIt end, std::size_t num_random, RNG& rng)
@@ -309,125 +272,8 @@ namespace CoCoA {
       return std::vector<T>(buffer.begin(), buffer.begin() + num_random);
   };
 
-  void EmitDigits(long n, std::vector<std::string>& out)
-  {
-      std::string s = std::to_string(n);
-      for (char c : s) {
-          out.push_back(std::string(1, c));
-      }
-  }
 
-  void TokenizePolynomial(
-  const RingElem& f,
-  std::vector<std::string>& out
-  )
-  {
-      PolyRing P = owner(f);
-
-      for (SparsePolyIter it = BeginIter(f); !IsEnded(it); ++it) {
-
-          out.push_back("<TERM>");
-
-          std::vector<long> exps;
-          exponents(exps, PP(it));
-
-          for (long i = 0; i < NumIndets(P); ++i) {
-              if (exps[i] != 0) {
-                  out.push_back("<VAR>");
-                  EmitDigits(i, out);
-
-                  out.push_back("<EXP>");
-                  EmitDigits(exps[i], out);
-              }
-          }
-      }
-  }
-
-  std::vector<std::string> truncate_tokens_at_term_start(
-      const std::vector<std::string>& tokens,
-      std::size_t max_len,
-      const std::string& term_start_token = "<TERM>",
-      const std::string& trunc_token = "<TRUNC>"
-  ) {
-      if (tokens.size() <= max_len) {
-          return tokens;
-      }
-
-      std::size_t allowed_len = max_len - 1;
-      std::vector<std::size_t> term_starts;
-
-      for (std::size_t i = 0; i < tokens.size(); ++i) {
-          if (tokens[i] == term_start_token) {
-              term_starts.push_back(i);
-          }
-      }
-
-      std::size_t cut = std::string::npos;
-
-      for (std::size_t i = 0; i < term_starts.size(); ++i) {
-          std::size_t end =
-              (i + 1 < term_starts.size())
-                  ? term_starts[i + 1]
-                  : tokens.size();
-
-          if (end <= allowed_len) {
-              cut = end;
-          } else {
-              break;
-          }
-      }
-
-      if (cut == std::string::npos) {
-          return {trunc_token};
-      }
-
-      std::vector<std::string> result;
-      result.reserve(cut + 1);
-      result.insert(result.end(), tokens.begin(), tokens.begin() + cut);
-      result.push_back(trunc_token);
-
-      return result;
-  }
-
-
-    std::vector<std::string> TokenizePolynomialFixedLength(
-    const RingElem& poly,
-    std::size_t max_len,
-    const std::string& poly_start,
-    const std::string& poly_end
-  )
-  {
-    if (max_len < 2) {
-        throw std::invalid_argument("max_len too small for polynomial markers");
-    }
-
-    std::vector<std::string> out;
-
-    std::vector<std::string> result;
-    result.reserve(max_len);
-
-    result.push_back(poly_start);
-
-    TokenizePolynomial(poly, out);
-
-    std::vector<std::string> body =
-    truncate_tokens_at_term_start(
-        out,
-        max_len - 2
-    );
-
-    result.insert(result.end(), body.begin(), body.end());
-    result.push_back(poly_end);
-
-    // Pad AFTER polynomial is complete
-    while (result.size() < max_len) {
-        result.push_back("<PAD>");
-    }
-
-    return result;
-
-  }
-
+  // This function creates the comparison rule for the different heuristic strategies including random selection. This is then used with std::min etc. 
   SelectionResult SPairComparator(SelectionType selection, const std::vector<RingElem>& G, const std::vector<int>& Sugars, std::optional<unsigned> seed, std::mt19937& rng) {
     SelectionResult out;
 
@@ -464,35 +310,6 @@ namespace CoCoA {
           };
           break;
 
-      case SelectionType::PolicyMimic:
-          out.cmp = [&G](const SPair &p1, const SPair &p2) {
-              const int overlap1 = leading_overlap_degree(p1, G);
-              const int overlap2 = leading_overlap_degree(p2, G);
-              const std::vector<long> lm1_lcm1 = kth_pair_lcm_exponents(p1, G, 1);
-              const std::vector<long> lm1_lcm2 = kth_pair_lcm_exponents(p2, G, 1);
-              const int lm1_lcm_deg1 = total_degree_from_exponents(lm1_lcm1);
-              const int lm1_lcm_deg2 = total_degree_from_exponents(lm1_lcm2);
-
-              return std::make_tuple(
-                  p1.Lij,
-                  -overlap1,
-                  lm1_lcm_deg1,
-                  lm1_lcm1,
-                  -p1.Sugar,
-                  p1.j,
-                  p1.i
-              ) < std::make_tuple(
-                  p2.Lij,
-                  -overlap2,
-                  lm1_lcm_deg2,
-                  lm1_lcm2,
-                  -p2.Sugar,
-                  p2.j,
-                  p2.i
-              );
-          };
-          break;
-
       case SelectionType::TrueDegree:
           out.cmp = [&G](const SPair &p1, const SPair &p2) {
               RingElem SPoly1 = SPoly(G[p1.i], G[p1.j]);
@@ -520,7 +337,7 @@ namespace CoCoA {
   };
 
   // take a polynomial f and a vector of polynomials v return the index of the first polynomial in the 
-  // vector which divides f
+  // vector whose leading monomial divides the leading monomial of f. If a polynomial cannot be found then the function returns -1 
   long FindReducer(ConstRefRingElem f,
                  const std::vector<RingElem>& v,
                  const std::vector<PPMonoidElem>& LMv)
@@ -539,6 +356,7 @@ namespace CoCoA {
       return -1;
   }
 
+  // NRLM = Normal Remainder Leading Monomial - This function is responsible for taking an input polynomial f and then reducing it as much as it possibly can be by the polynomials in vector v. It does this by setting r = f and then as long as FindReducer returns an index in the vector subtracting LM(r)/LM(V[i])* v[i] from r. The loop will also terminate in the event that r=0 meaning that f has been completely reduced.
   std::tuple <RingElem, long, long> NRLM(ConstRefRingElem f, 
   const std::vector <RingElem> &v,
   const std::vector<PPMonoidElem>& LMv,
@@ -568,6 +386,7 @@ namespace CoCoA {
     return {r, steps, sugar}; // if we exit from the loop not having found r, then the leading monomial of r is no longer reducible
   }
 
+  // This function wraps around the NRLM function and performs the important step of, in the event that the leading monomial of the temporary remainder polynomial to the true remainder and then checking to see if any of the remaining terms in the temporary remainder are divisible by any element of v.
   std::tuple <RingElem, long, long> NormalRemainder(ConstRefRingElem f,
   const std::vector <RingElem> &v,
   const std::vector<PPMonoidElem>& LMv,
@@ -592,39 +411,14 @@ namespace CoCoA {
     return {ansNR, totalsteps, sugar};
   }
 
+  // Function for constructing the S-Polynomial for two basis elements g and h
   RingElem SPoly(ConstRefRingElem g, ConstRefRingElem h) {
     const ring P = owner(g);
     PPMonoidElem m = lcm(LPP(g), LPP(h));
     return monomial(P, 1 / LC(g), m / LPP(g)) * g - monomial(P, 1 / LC(h), m / LPP(h)) * h;
   }
 
-  std::pair <RingElem, long> reduce(ConstRefRingElem g, const std::vector <RingElem> &F) {
-    long steps = 0;
-    const ring P = owner(g);
-    RingElem r(P);
-    RingElem h = g;
-
-    while (!IsZero(h)) {
-        bool found_divisor = false;
-
-        for (RingElem f: F) {
-            if (IsDivisible(LPP(h), LPP(f))) {
-                h -= monomial(P, LC(h) / LC(f), (LPP(h) / LPP(f))) * f;
-                found_divisor = true;
-                ++steps;
-                break;
-            }
-        }
-
-        if (!found_divisor) {
-            r += monomial(P, LC(h), LPP(h));
-            h -= monomial(P, LC(h), LPP(h));
-        }
-    }
-
-    return {r + h, steps};
-  }
-
+  // The update function - when a new polynomial f is being added to the basis set vector the update function removes unnecessary pairs according to the elimination criteria being used 
   void update(std::vector<RingElem>& G,
             std::vector<PPMonoidElem>& LM,   // cache: LM[k] = LPP(G[k])
             std::vector<int>& degLM,
@@ -729,6 +523,7 @@ namespace CoCoA {
 
 }
 
+// A seperate version of the update function for runs where additional features are being tracked during Buchberger. 
 void update(std::vector<RingElem>& G,
             std::vector<PPMonoidElem>& LM,   // cache: LM[k] = LPP(G[k])
             std::vector<int>& degLM,
@@ -849,6 +644,7 @@ void update(std::vector<RingElem>& G,
 }
 
 
+  // Function for minimalizating grobner basis G - A Grobner basis is minimal if no leading monomial of one basis element divides the leading monomial of another
   std::vector <RingElem> minimalize(const std::vector <RingElem> &G) {
     std::vector <RingElem> G_ = G;
     std::sort(G_.begin(), G_.end(), [](ConstRefRingElem f, ConstRefRingElem g) { return LPP(f) < LPP(g); });
@@ -862,15 +658,30 @@ void update(std::vector<RingElem>& G,
     return Gmin;
   }
 
+  // Function for interreducing grobner basis G - A basis is interreduced if every polynomial is reduced with respect to all of the others. This means that no monomial anywhere in any basis element is divisible by the leading monomial of another basis element
   std::vector <RingElem> interreduce(const std::vector <RingElem> &G) {
-    std::vector <RingElem> Gred;
+    std::vector<PPMonoidElem> LM;
+    std::vector<int> sugars;
+    LM.reserve(G.size());
+    sugars.reserve(G.size());
+    for (ConstRefRingElem g: G) {
+        LM.push_back(LPP(g));
+        sugars.push_back(deg(g));
+    }
+
+    std::vector<RingElem> Gred;
+    Gred.reserve(G.size());
     for (ConstRefRingElem g: G) {
         const ring P = owner(g);
-        Gred.push_back((reduce(g - monomial(P, LPP(g)), G).first + monomial(P, LPP(g))));
+        const RingElem leading_monomial = monomial(P, LPP(g));
+        // Preserve the monic-input convention; only the remainder is needed here.
+        auto reduction = NormalRemainder(g - leading_monomial, G, LM, deg(g), sugars);
+        Gred.push_back(std::get<0>(reduction) + leading_monomial);
     }
     return Gred;
   }
 
+  // This function organizes inputs to be run through the overloaded version of the function below that then runs Buchberger's algorithm with those inputs
   std::pair<std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector<RingElem>& F,
   SelectionType selection,
   EliminationType elimination,
@@ -912,6 +723,7 @@ void update(std::vector<RingElem>& G,
     return buchberger(G, LM, degLM, Sugars, P, selection, elimination, rewards, sort_reducers, gamma, seed);
   }
 
+  // The main function for computing Buchbeger's algorithm 
   std::pair <std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector <RingElem> &F,
     const std::vector <PPMonoidElem>& LM_F,
     const std::vector <int>& degLM_F,
@@ -950,15 +762,13 @@ void update(std::vector<RingElem>& G,
     auto select = SPairComparator(selection, G, Sugars, seed, rng);
 
     while (!P.empty()) {
-      // The pair belong to the pair set is chosen that is minimal according to the heuristic
-      // Note for the future, can define a sort function in a similar manner to this
+      // The pair belonging to the pair set is chosen that is minimal according to the heuristic
       auto iter = select.is_random ? choice(P.begin(), P.end(), rng) : std::min_element(P.begin(), P.end(), select.cmp);
       SPair p = *iter;
-      P.erase(iter);
+      P.erase(iter); 
       RingElem r;
       long s;
       int r_sugar;
-      // std::tie(r,s) = reduce(SPoly(G[p.i], G[p.j]), G_);
       std::tie(r, s, r_sugar) = NormalRemainder(SPoly(G[p.i], G[p.j]), G_, LM_G_, p.Sugar, SugarsG_);
       double reward = (rewards == RewardType::Additions) ? (-1.0 - s) : -1.0;
       stats.polynomial_additions += s + 1;
@@ -1218,188 +1028,6 @@ void update(std::vector<RingElem>& G,
       return lead;
   }
 
-  LeadMonomialsEnv::LeadMonomialsEnv(std::string ideal_dist, 
-                                      std::string elimination,
-                                      std::string reward,
-                                      std::string pq_strategy,
-                                      bool sort_input,
-                                      bool sort_reducers,
-                                      bool fix_ideal,
-                                      int N,
-                                      int k): env{ideal_dist, elimination_map.at(elimination), reward_map.at(reward), sort_input, sort_reducers, fix_ideal}, N(N), k(k) {
-      SPairPriorityStrategy = strategy_map.at(pq_strategy);
-      n = env.nvars();
-      cols = 2 * env.nvars() * k;
-  }
-
-  void LeadMonomialsEnv::reset() {
-      env.reset();
-      state.clear();
-      leads.clear();
-      for (ConstRefRingElem g: env.G) {
-          leads.push_back(lead_monomials_vector(g, k, n));
-      }
-
-      std::mt19937 rng;
-      auto select = SPairComparator(SPairPriorityStrategy, env.G, env.Sugars, seed, rng);
-      
-      N_Pairs = env.P.size();
-      int true_N = std::min(N, N_Pairs);
-
-      top_N_P.clear();
-      top_N_P.resize(true_N);
-
-      if (select.is_random) {
-        top_N_P = random_unique(env.P.begin(), env.P.end(), true_N, rng);
-      } else {
-        std::partial_sort_copy(env.P.begin(), env.P.end(), top_N_P.begin(), top_N_P.end(), select.cmp);
-      }
-
-      for (const auto &p: top_N_P) {
-        state.insert(state.end(), leads[p.i].begin(), leads[p.i].end());
-        state.insert(state.end(), leads[p.j].begin(), leads[p.j].end());
-      }
-      if (true_N < N){
-        state.insert(state.end(), 2 * (N - true_N) * n * k , 0);
-      }
-  }
-
-  double LeadMonomialsEnv::step(int action) {
-      // Need to find the index of top_N_P[action] in env.P
-      auto P_action = std::distance(env.P.begin(), std::find(env.P.begin(), env.P.end(), top_N_P[action]));
-      double reward = env.step(P_action);
-      try {
-          if (leads.size() < env.G.size()) {
-              leads.push_back(lead_monomials_vector(env.G[env.G.size() - 1], k, n));
-          }
-          state.clear();
-      } catch (const CoCoA::ErrorInfo &err) {
-          std::cerr << "***ERROR***  UNCAUGHT CoCoA error";
-          ANNOUNCE(std::cerr, err);
-      }
-
-      std::mt19937 rng;
-      auto select = SPairComparator(SPairPriorityStrategy, env.G, env.Sugars, seed, rng);
-      N_Pairs = env.P.size();
-      int true_N = std::min(N, N_Pairs);
-
-
-      top_N_P.clear();
-      top_N_P.resize(true_N);
-
-
-      if (select.is_random) {
-        top_N_P = random_unique(env.P.begin(), env.P.end(), true_N, rng);
-      } else {
-        std::partial_sort_copy(env.P.begin(), env.P.end(), top_N_P.begin(), top_N_P.end(), select.cmp);
-      }
-
-      for (const auto &p: top_N_P) {
-          state.insert(state.end(), leads[p.i].begin(), leads[p.i].end());
-          state.insert(state.end(), leads[p.j].begin(), leads[p.j].end());
-      }
-      if (true_N < N){
-        state.insert(state.end(), 2 * (N - true_N) * n * k , 0);
-      }
-      return reward;
-
-  }
-
-  // std::vector<int> LeadMonomialsEnv::features() {
-  //     std::vector<int> my_features;
-  //     int n_pairs;
-  //     n_pairs = env.P.size();
-  //     my_features.push_back(n_pairs);
-  //     return my_features;
-  // }
-
-  void LeadMonomialsEnv::pp_state() {
-
-    std::mt19937 rng;
-    SPair first_p;
-    SPair last_p;
-    SPair degree_p;
-    SPair normal_p;
-    SPair sugar_p;
-    SPair policy_mimic_p;
-    SPair true_degree_p;
-
-    const std::array<SelectionType, 6> selection_types = {
-        SelectionType::First,
-        SelectionType::Degree,
-        SelectionType::Normal,
-        SelectionType::Sugar,
-        SelectionType::PolicyMimic,
-        SelectionType::TrueDegree
-    };
-
-    for (SelectionType type : selection_types) {
-        auto comparator = SPairComparator(type, env.G, env.Sugars, seed, rng);
-        auto iter = std::min_element(top_N_P.begin(), top_N_P.end(), comparator.cmp);
-        switch (type) {
-          case SelectionType::First:
-              first_p = *iter;
-              break;
-            case SelectionType::Last:
-              last_p = *iter;
-              break;
-          case SelectionType::Degree:
-              degree_p = *iter;
-              break;
-          case SelectionType::Normal:
-              normal_p = *iter;
-              break;
-          case SelectionType::Sugar:
-              sugar_p = *iter;
-              break;
-          case SelectionType::PolicyMimic:
-              policy_mimic_p = *iter;
-              break;
-          case SelectionType::Random:
-              break;
-          case SelectionType::TrueDegree:
-              true_degree_p = *iter;
-              break;
-    }
-    }
-
-    std::cout << "----------------------" << "\n";
-    std::cout << "Pair Set:" << "\n";
-    std::cout << "----------------------" << "\n";
-
-    int counter = 1;
-
-    for (const auto &p: top_N_P) {
-        std::cout << counter << ": P_i: " << env.G[p.i] << ", P_j: " << env.G[p.j] << ", x-gamma: " << lcm(LPP(env.G[p.i]), LPP(env.G[p.j])) << ", S-poly: " << SPoly(env.G[p.i], env.G[p.j]);
-        if (p == first_p){
-          std::cout << " <-- First";
-        }
-        if (p == last_p){
-          std::cout << " <-- Last";
-        }
-        if (p == degree_p){
-          std::cout << " <-- Degree";
-        } 
-        if (p == normal_p){
-          std::cout << " <-- Normal";
-        } 
-        if (p == sugar_p){
-          std::cout << " <-- Sugar";
-        } 
-        if (p == policy_mimic_p){
-          std::cout << " <-- PolicyMimic";
-        }
-        if (p == true_degree_p){
-          std::cout << " <-- TrueDegree";
-        } 
-        std::cout << "\n\n";
-        counter = counter + 1;
-      }
-
-    
-
-  }
-
   // Creating an environment for returning lead exponent vector of G rather than G[p.i], G[p.j]
 
   GLeadMonomialsEnv::GLeadMonomialsEnv(std::string ideal_dist, 
@@ -1418,7 +1046,6 @@ void update(std::vector<RingElem>& G,
         throw std::invalid_argument("GLeadMonomialsEnv requires positive N_P and N_G budgets");
       }
       n = env.nvars();
-      n_vars = n;
       cols = env.nvars() * k;
       g_cols = cols;
       p_cols = 2 * cols;
@@ -1441,7 +1068,6 @@ void update(std::vector<RingElem>& G,
         throw std::invalid_argument("GLeadMonomialsEnv requires positive N_P and N_G budgets");
       }
       n = env.nvars();
-      n_vars = n;
       cols = env.nvars() * k;
       g_cols = cols;
       p_cols = 2 * cols;
@@ -1450,14 +1076,13 @@ void update(std::vector<RingElem>& G,
   void GLeadMonomialsEnv::build_padded_observation() {
     G_padded.assign(N_G * g_cols, 0);
     P_padded.assign(N_P * p_cols, 0);
-    P_idx_padded.assign(N_P * 2, -1);
     P_sugars_padded.assign(N_P, 0);
     P_normal_ranks_padded.assign(N_P, 0);
     G_mask.assign(N_G, 0);
     P_mask.assign(N_P, 0);
 
     const int n_basis = static_cast<int>(leads.size() / g_cols);
-    std::vector<int> global_to_local(n_basis, -1);
+    std::vector<bool> basis_visible(n_basis, false);
     std::vector<int> visible_g_indices;
     visible_g_indices.reserve(std::min(N_G, n_basis));
 
@@ -1465,13 +1090,13 @@ void update(std::vector<RingElem>& G,
       if (global_idx < 0 || global_idx >= n_basis) {
         return;
       }
-      if (global_to_local[global_idx] >= 0) {
+      if (basis_visible[global_idx]) {
         return;
       }
       if (static_cast<int>(visible_g_indices.size()) >= N_G) {
         return;
       }
-      global_to_local[global_idx] = static_cast<int>(visible_g_indices.size());
+      basis_visible[global_idx] = true;
       visible_g_indices.push_back(global_idx);
     };
 
@@ -1505,9 +1130,6 @@ void update(std::vector<RingElem>& G,
       const SPair& p = top_N_P[i];
       P_mask[i] = 1;
 
-      P_idx_padded[2 * i] = (p.i >= 0 && p.i < n_basis) ? global_to_local[p.i] : -1;
-      P_idx_padded[2 * i + 1] = (p.j >= 0 && p.j < n_basis) ? global_to_local[p.j] : -1;
-
       if (i < static_cast<int>(P_sugars.size())) {
         P_sugars_padded[i] = P_sugars[i];
       }
@@ -1540,17 +1162,10 @@ void update(std::vector<RingElem>& G,
     env.reset();
     basis_elements = env.last_reset_basis_elements;
     leads.clear();
-    G_terms.clear();
-    G_term_counts.clear();
     P_idx.clear();
     for (ConstRefRingElem g: env.G) {
       std::vector<long> lead = lead_monomials_vector(g, k, n);
       leads.insert(leads.end(), lead.begin(), lead.end());
-
-      const long n_terms = NumTerms(g);
-      std::vector<long> full_terms = lead_monomials_vector(g, n_terms, n);
-      G_terms.insert(G_terms.end(), full_terms.begin(), full_terms.end());
-      G_term_counts.push_back(static_cast<int>(n_terms));
     }
 
     std::mt19937 rng;
@@ -1609,12 +1224,6 @@ void update(std::vector<RingElem>& G,
     if (prev_G_size < env.G.size()) {
       std::vector<long> lead = lead_monomials_vector(env.G[env.G.size() - 1], k, n);
       leads.insert(leads.end(), lead.begin(), lead.end());
-
-      const auto& g_new = env.G[env.G.size() - 1];
-      const long n_terms = NumTerms(g_new);
-      std::vector<long> full_terms = lead_monomials_vector(g_new, n_terms, n);
-      G_terms.insert(G_terms.end(), full_terms.begin(), full_terms.end());
-      G_term_counts.push_back(static_cast<int>(n_terms));
     }
     // For P_idx it is maybe not best but it is simplest to rebuild from scratch as the set of pairs can have varied a lot during one step
     P_idx.clear();
@@ -1695,7 +1304,6 @@ void update(std::vector<RingElem>& G,
   void NoPQEnv::reset() {
       env.reset();
       state.clear();
-      P_idx.clear();
       G_leads.clear();
       leads.clear();
       for (ConstRefRingElem g: env.G) {
@@ -1706,8 +1314,6 @@ void update(std::vector<RingElem>& G,
 
       N_Pairs = env.P.size();
       for (const auto &p: env.P) {
-        P_idx.push_back(p.i);
-        P_idx.push_back(p.j);
         state.insert(state.end(), leads[p.i].begin(), leads[p.i].end());
         state.insert(state.end(), leads[p.j].begin(), leads[p.j].end());
       }
@@ -1722,7 +1328,6 @@ void update(std::vector<RingElem>& G,
               leads.push_back(lead_monomials_vector(env.G[env.G.size() - 1], k, n));
           }
           state.clear();
-        P_idx.clear();
         G_leads.clear();
       } catch (const CoCoA::ErrorInfo &err) {
           std::cerr << "***ERROR***  UNCAUGHT CoCoA error";
@@ -1736,8 +1341,6 @@ void update(std::vector<RingElem>& G,
       }
 
       for (const auto &p: env.P) {
-          P_idx.push_back(p.i);
-          P_idx.push_back(p.j);
           state.insert(state.end(), leads[p.i].begin(), leads[p.i].end());
           state.insert(state.end(), leads[p.j].begin(), leads[p.j].end());
       }

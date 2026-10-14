@@ -1,3 +1,5 @@
+"""Evaluate a saved policy checkpoint on a fixed corpus of ideals."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
@@ -13,10 +15,12 @@ import numpy as np
 import torch
 import tyro
 
-from .combined_networks import CombinedPolicyNetwork, checkpoint_uses_legacy_pair_scoring_head
-from .config_dataclasses import ActorConfig, EnvConfig, ModelInputs
-from .runner import load_training_module
-
+from deepgroebner_pytorch_cocoa.combined_networks import CombinedPolicyNetwork
+from deepgroebner_pytorch_cocoa.config_dataclasses import ActorConfig, EnvConfig
+from deepgroebner_pytorch_cocoa.model_input_utils import (
+    build_model_inputs_from_single_obs,
+)
+from deepgroebner_pytorch_cocoa.ppo_agent import CategoricalMasked
 
 DEFAULT_STATE_FEATURE_NAMES = [
     "G_cardinality",
@@ -53,20 +57,19 @@ class EvalCorpusConfig:
     output_dir: str | None = None
     gym_id: str | None = "BuchbergerExponentsNoPQ-v1"
     device: Literal["auto", "cpu", "cuda"] = "auto"
-    legacy_actor_network: tyro.conf.FlagConversionOff[bool] = False
     verbosity: Literal["quiet", "normal", "verbose"] = "normal"
 
 
-def _console_print(cfg: EvalCorpusConfig, *parts: object, level: Literal["normal", "verbose"] = "normal") -> None:
+def _console_print(
+    cfg: EvalCorpusConfig,
+    *parts: object,
+    level: Literal["normal", "verbose"] = "normal",
+) -> None:
     if cfg.verbosity == "quiet":
         return
     if level == "verbose" and cfg.verbosity != "verbose":
         return
     print(*parts)
-
-
-def _load_trainer_module():
-    return load_training_module()
 
 
 def _space_last_dim(space: Any) -> int:
@@ -75,21 +78,6 @@ def _space_last_dim(space: Any) -> int:
     if hasattr(space, "feature_space") and hasattr(space.feature_space, "shape"):
         return int(space.feature_space.shape[-1])
     raise ValueError(f"Unable to infer last dimension from space: {space}")
-
-
-def _polynomial_term_input_dim(env: gym.Env) -> int | None:
-    obs_space = env.observation_space
-    spaces = getattr(obs_space, "spaces", obs_space)
-    if "G_terms" not in spaces:
-        return None
-    dim = _space_last_dim(spaces["G_terms"])
-    if "G_term_coeffs" in spaces:
-        dim += 1
-    return dim
-
-
-def _obs_to_model_inputs(obs: dict[str, Any], device: torch.device, trainer_module) -> ModelInputs:
-    return trainer_module.build_model_inputs_from_obs(obs, device)
 
 
 def _split_symbols(symbols: str) -> list[str]:
@@ -105,7 +93,9 @@ def _resolve_corpus_symbols(corpus_rows: list[dict[str, Any]]) -> str:
     for row_idx, row in enumerate(corpus_rows):
         symbols = row.get("symbols")
         if not isinstance(symbols, str) or not symbols.strip():
-            raise ValueError(f"Corpus row {row_idx} is missing a non-empty 'symbols' field.")
+            raise ValueError(
+                f"Corpus row {row_idx} is missing a non-empty 'symbols' field."
+            )
         row_symbols = _split_symbols(symbols)
         parsed_rows.append(row_symbols)
         if len(row_symbols) > len(widest_symbols):
@@ -136,7 +126,11 @@ def _normalize_gym_id(gym_id: str | None) -> str | None:
 
 def _unwrap_config_section(config: dict[str, Any], key: str) -> dict[str, Any]:
     section = config[key]
-    if isinstance(section, dict) and "value" in section and isinstance(section["value"], dict):
+    if (
+        isinstance(section, dict)
+        and "value" in section
+        and isinstance(section["value"], dict)
+    ):
         return section["value"]
     if isinstance(section, dict):
         return section
@@ -150,9 +144,13 @@ def _get_state_feature_names(env: gym.Env) -> list[str]:
     return list(names)
 
 
-def _extract_state_feature(obs: dict[str, Any], feature_names: list[str], feature_name: str) -> float:
+def _extract_state_feature(
+    obs: dict[str, Any], feature_names: list[str], feature_name: str
+) -> float:
     if feature_name not in feature_names:
-        raise KeyError(f"State feature {feature_name!r} not found in feature names: {feature_names}")
+        raise KeyError(
+            f"State feature {feature_name!r} not found in feature names: {feature_names}"
+        )
     state_features = np.asarray(obs["state_features"], dtype=np.float32).reshape(-1)
     idx = feature_names.index(feature_name)
     if idx >= state_features.shape[0]:
@@ -163,7 +161,9 @@ def _extract_state_feature(obs: dict[str, Any], feature_names: list[str], featur
     return float(state_features[idx])
 
 
-def _compute_queue_usage_stats(pair_counts: list[float], pq_budget: int | None) -> dict[str, Any]:
+def _compute_queue_usage_stats(
+    pair_counts: list[float], pq_budget: int | None
+) -> dict[str, Any]:
     if pair_counts:
         pair_counts_arr = np.asarray(pair_counts, dtype=np.float64)
         stats: dict[str, Any] = {
@@ -208,7 +208,9 @@ def _compute_queue_usage_stats(pair_counts: list[float], pq_budget: int | None) 
 
 
 def _summarize_numeric_values(values: list[Any]) -> dict[str, float] | None:
-    clean = np.asarray([value for value in values if value is not None], dtype=np.float64)
+    clean = np.asarray(
+        [value for value in values if value is not None], dtype=np.float64
+    )
     if clean.size == 0:
         return None
     return {
@@ -235,11 +237,21 @@ def _build_queue_usage_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if col_summary is not None:
             summary[col] = col_summary
 
-    budgets = sorted({int(budget) for budget in [row.get("pq_budget") for row in rows] if budget is not None})
+    budgets = sorted(
+        {
+            int(budget)
+            for budget in [row.get("pq_budget") for row in rows]
+            if budget is not None
+        }
+    )
     if len(budgets) == 1:
         summary["pq_budget"] = budgets[0]
 
-    binding_values = [row.get("pq_binding_ever") for row in rows if row.get("pq_binding_ever") is not None]
+    binding_values = [
+        row.get("pq_binding_ever")
+        for row in rows
+        if row.get("pq_binding_ever") is not None
+    ]
     if binding_values:
         binding_arr = np.asarray(binding_values, dtype=np.float64)
         summary["pq_binding_ever_rate"] = float(binding_arr.mean())
@@ -253,16 +265,26 @@ def _is_best_greedy_eval_checkpoint(model_path: Path) -> bool:
     return model_path.stem.endswith(BEST_GREEDY_EVAL_SUFFIX)
 
 
-def _resolve_model_path(model_name: str, models_dir: Path, checkpoint_type: str = "auto") -> Path:
+def _resolve_model_path(
+    model_name: str, models_dir: Path, checkpoint_type: str = "auto"
+) -> Path:
     path = Path(model_name).expanduser()
     if path.is_file():
         return path.resolve()
 
     candidates = list(models_dir.expanduser().glob(f"**/*{model_name}*.pt"))
     if checkpoint_type == "best_greedy_eval":
-        candidates = [candidate for candidate in candidates if _is_best_greedy_eval_checkpoint(candidate)]
+        candidates = [
+            candidate
+            for candidate in candidates
+            if _is_best_greedy_eval_checkpoint(candidate)
+        ]
     elif checkpoint_type == "final":
-        candidates = [candidate for candidate in candidates if not _is_best_greedy_eval_checkpoint(candidate)]
+        candidates = [
+            candidate
+            for candidate in candidates
+            if not _is_best_greedy_eval_checkpoint(candidate)
+        ]
     elif checkpoint_type != "auto":
         raise ValueError(f"Unknown checkpoint_type={checkpoint_type!r}")
 
@@ -347,41 +369,29 @@ def _load_actor(
     env: gym.Env,
     model_path: Path,
     device: torch.device,
-    legacy_actor_network: bool = False,
 ) -> CombinedPolicyNetwork:
     state = torch.load(model_path, map_location=device)
     if isinstance(state, dict):
-        actor_state = {k.replace("actor.", "", 1): v for k, v in state.items() if k.startswith("actor.")}
+        actor_state = {
+            k.replace("actor.", "", 1): v
+            for k, v in state.items()
+            if k.startswith("actor.")
+        }
         if actor_state:
             state = actor_state
 
     valid_init_fields = {field.name for field in fields(ActorConfig) if field.init}
-    filtered_cfg = {key: value for key, value in actor_cfg_dict.items() if key in valid_init_fields}
+    filtered_cfg = {
+        key: value for key, value in actor_cfg_dict.items() if key in valid_init_fields
+    }
     actor_cfg = ActorConfig(**filtered_cfg)
     actor_cfg.state_embedding_head_in_dim = _space_last_dim(env.observation_space["G"])
-    actor_cfg.state_features_embedding_head_in_dim = _space_last_dim(env.observation_space["state_features"])
-    actor_cfg.polynomial_term_in_dim = _polynomial_term_input_dim(env)
+    actor_cfg.state_features_embedding_head_in_dim = _space_last_dim(
+        env.observation_space["state_features"]
+    )
     actor_cfg.pair_embedding_head_in_dim = _space_last_dim(env.observation_space["P"])
 
-    uses_pair_scoring_head = (
-        actor_cfg.pair_combiner == "pair-only"
-        or (
-            actor_cfg.pair_combiner != "basis-cross-attn"
-            and actor_cfg.state_embedding_head is None
-            and actor_cfg.state_features_embedding_head is None
-            and not actor_cfg.share_polynomial_encoder_between_heads
-        )
-    )
-    use_legacy_pair_scoring_head = (
-        uses_pair_scoring_head
-        and isinstance(state, dict)
-        and (legacy_actor_network or checkpoint_uses_legacy_pair_scoring_head(state))
-    )
-
-    actor = CombinedPolicyNetwork(
-        actor_cfg,
-        legacy_pair_scoring_head=use_legacy_pair_scoring_head,
-    ).to(device)
+    actor = CombinedPolicyNetwork(actor_cfg).to(device)
     actor.load_state_dict(state)
     actor.eval()
     return actor
@@ -399,7 +409,9 @@ def _load_corpus_rows(corpus_path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _build_env_kwargs(env_cfg: EnvConfig, corpus_symbols: str, row: dict[str, Any]) -> dict[str, Any]:
+def _build_env_kwargs(
+    env_cfg: EnvConfig, corpus_symbols: str, row: dict[str, Any]
+) -> dict[str, Any]:
     env_kwargs = {
         "ideal_dist": None,
         "elimination": env_cfg.elimination,
@@ -455,12 +467,12 @@ def _build_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def main() -> None:
-    cli_cfg = tyro.cli(EvalCorpusConfig)
-    trainer_module = _load_trainer_module()
+def main(args: list[str] | None = None) -> None:
+    cli_cfg = tyro.cli(EvalCorpusConfig, args=args)
     device = torch.device(
-        "cuda" if (cli_cfg.device == "auto" and torch.cuda.is_available()) else cli_cfg.device
-        if cli_cfg.device != "auto" else "cpu"
+        "cuda"
+        if (cli_cfg.device == "auto" and torch.cuda.is_available())
+        else cli_cfg.device if cli_cfg.device != "auto" else "cpu"
     )
 
     model_path = _resolve_model_path(
@@ -489,13 +501,14 @@ def main() -> None:
     _console_print(cli_cfg, f"Corpus: {corpus_path} ({len(corpus_rows)} ideals)")
     _console_print(cli_cfg, f"Evaluation gym id: {env_cfg.gym_id}")
 
-    base_env = gym.make(env_cfg.gym_id, **_build_env_kwargs(env_cfg, corpus_symbols, corpus_rows[0]))
+    base_env = gym.make(
+        env_cfg.gym_id, **_build_env_kwargs(env_cfg, corpus_symbols, corpus_rows[0])
+    )
     actor = _load_actor(
         _unwrap_config_section(train_cfg, "actor"),
         base_env,
         model_path,
         device,
-        legacy_actor_network=cli_cfg.legacy_actor_network,
     )
     state_feature_names = _get_state_feature_names(base_env)
     pq_budget = None
@@ -509,7 +522,9 @@ def main() -> None:
     rows: list[dict[str, Any]] = []
     with torch.no_grad():
         for row_idx, row in enumerate(corpus_rows):
-            env = gym.make(env_cfg.gym_id, **_build_env_kwargs(env_cfg, corpus_symbols, row))
+            env = gym.make(
+                env_cfg.gym_id, **_build_env_kwargs(env_cfg, corpus_symbols, row)
+            )
             obs, _ = env.reset(seed=row.get("episode_seed"))
             done = False
             total_return = 0.0
@@ -517,10 +532,12 @@ def main() -> None:
             pair_counts: list[float] = []
 
             while not done:
-                pair_counts.append(_extract_state_feature(obs, state_feature_names, "P_cardinality"))
-                inputs = _obs_to_model_inputs(obs, device, trainer_module)
+                pair_counts.append(
+                    _extract_state_feature(obs, state_feature_names, "P_cardinality")
+                )
+                inputs = build_model_inputs_from_single_obs(obs, device)
                 logits = actor(inputs).squeeze(-1)
-                probs = trainer_module.CategoricalMasked(logits=logits, masks=inputs.P_mask).probs
+                probs = CategoricalMasked(logits=logits, masks=inputs.P_mask).probs
                 action = int(torch.argmax(probs, dim=-1).item())
                 obs, reward, terminated, truncated, _ = env.step(np.int32(action))
                 done = bool(terminated or truncated)

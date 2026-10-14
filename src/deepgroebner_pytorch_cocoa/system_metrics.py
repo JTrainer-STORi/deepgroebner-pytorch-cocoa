@@ -1,3 +1,5 @@
+"""Functions for monitoring and logging system metrics during training"""
+
 import json
 import os
 import time
@@ -155,7 +157,7 @@ def summarize_state_feature_rollout(
 
 
 class SystemMetricsRecorder:
-    """Periodically writes time-stamped system metrics to a JSONL file."""
+    """Writes time-stamped system metrics to a JSONL file."""
 
     def __init__(
         self,
@@ -173,29 +175,29 @@ class SystemMetricsRecorder:
         self.sample_interval_seconds = float(sample_interval_seconds)
         self.snapshot_fn = snapshot_fn
         self.clock_fn = clock_fn
-        self._last_sample_time: float | None = None
+        self.last_sample_time: float | None = None
         self._handle = None
 
         if self.enabled:
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
             self._handle = self.output_path.open("a", encoding="utf-8")
 
-    def maybe_record(
+    def record(
         self,
         *,
         global_step: int,
         elapsed_seconds: float,
         policy_updates: int | None = None,
         extra_metrics: dict[str, Any] | None = None,
-        force: bool = False,
-    ) -> dict[str, Any] | None:
-        if not self.enabled or self._handle is None:
-            return None
+        sample_time: float | None = None,
+    ) -> dict[str, Any]:
+        """Write one snapshot; the caller decides whether and when to record."""
+        if self._handle is None:
+            raise RuntimeError(
+                "System metrics recorder must be enabled and open to record."
+            )
 
-        now = self.clock_fn()
-        if not force and self._last_sample_time is not None and self.sample_interval_seconds > 0:
-            if (now - self._last_sample_time) < self.sample_interval_seconds:
-                return None
+        now = self.clock_fn() if sample_time is None else sample_time
 
         record = {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -211,7 +213,7 @@ class SystemMetricsRecorder:
 
         self._handle.write(json.dumps(record) + "\n")
         self._handle.flush()
-        self._last_sample_time = now
+        self.last_sample_time = now
         return record
 
     def close(self) -> None:

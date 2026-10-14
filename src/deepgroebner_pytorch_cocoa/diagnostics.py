@@ -1,3 +1,5 @@
+"""Diagnostic functions for monitoring the correlation between the policies decisions and those that would have been made by heuristics, the influence of the state and state features on policy decisions using counterfactuals, diagnostics related to the attention weights in the alphastar transformer"""
+
 import torch
 from torch.distributions import Categorical
 
@@ -153,8 +155,12 @@ def run_actor_ranking_diagnostics(
     update_idx: int,
     global_step: int,
     ranking_every: int = 20,
+    *,
+    pair_idx_raw: torch.Tensor | None = None,
+    pair_sugar: torch.Tensor | None = None,
+    pair_normal_rank: torch.Tensor | None = None,
 ):
-    """Runs only policy-vs-heuristic ranking diagnostics and logs them."""
+    """Compare policy rankings with heuristics using optional diagnostic metadata."""
     if ranking_every <= 0 or (update_idx % ranking_every) != 0:
         return {}
 
@@ -165,9 +171,9 @@ def run_actor_ranking_diagnostics(
             logits,
             input.P,
             input.P_mask,
-            pair_idx_raw=input.P_idx_raw,
-            pair_sugar=input.P_sugar,
-            pair_normal_rank=input.P_normal_rank,
+            pair_idx_raw=pair_idx_raw,
+            pair_sugar=pair_sugar,
+            pair_normal_rank=pair_normal_rank,
         )
 
     writer.add_scalar(_diagnostic_metric_name("ranking_metrics_present"), 1.0 if metrics else 0.0, global_step)
@@ -382,30 +388,6 @@ def _attention_stats(weights: torch.Tensor, q_mask: torch.Tensor | None, k_mask:
     return stats
 
 
-def _edge_gate_stats(alpha: torch.Tensor, prefix: str):
-    """
-    alpha: sigmoid edge-gate values, typically (E, 1) from the last GNN layer.
-    """
-    eps = 1e-12
-    alpha = alpha.reshape(-1).clamp(min=eps, max=1.0 - eps)
-
-    if alpha.numel() == 0:
-        return {}
-
-    bern_entropy = -(alpha * alpha.log() + (1.0 - alpha) * (1.0 - alpha).log())
-
-    return {
-        f"{prefix}_mean": alpha.mean().item(),
-        f"{prefix}_std": alpha.std(unbiased=False).item(),
-        f"{prefix}_min": alpha.min().item(),
-        f"{prefix}_max": alpha.max().item(),
-        f"{prefix}_entropy": bern_entropy.mean().item(),
-        f"{prefix}_frac_lt_0p1": (alpha < 0.1).float().mean().item(),
-        f"{prefix}_frac_gt_0p9": (alpha > 0.9).float().mean().item(),
-        f"{prefix}_frac_mid_0p4_0p6": ((alpha >= 0.4) & (alpha <= 0.6)).float().mean().item(),
-    }
-
-
 def _attention_payload_metrics(attention_payload):
     metrics = {}
 
@@ -422,79 +404,26 @@ def _attention_payload_metrics(attention_payload):
                 continue
 
             prefix = f"attn_{branch_name}_{layer_name}"
-            data_type = layer_data.get("type", "attention")
-
-            if data_type == "edge_gate":
-                metrics.update(_edge_gate_stats(weights, prefix=prefix))
-            else:
-                q_mask = layer_data.get("q_mask")
-                k_mask = layer_data.get("k_mask")
-                metrics.update(_attention_stats(weights, q_mask, k_mask, prefix=prefix))
+            q_mask = layer_data.get("q_mask")
+            k_mask = layer_data.get("k_mask")
+            metrics.update(_attention_stats(weights, q_mask, k_mask, prefix=prefix))
 
     return metrics
 
-def _head_logits_from_state(actor, pair_embedding, state, mask, state_feats=None, model_inputs=None):
-    if getattr(actor, "state_routed_pair_embedding", False):
-        pair_embedding, _ = actor._compute_pair_embedding(
-            model_inputs,
-            state,
-            state_feats,
-            return_attention=False,
-        )
-    if getattr(actor, "pair_only_scoring", False):
-        logits = actor._score_from_embeddings(
-            pair_embedding,
-            model_inputs,
-            state,
-            state_feats,
-        )
-        return logits.squeeze(-1)
-    if getattr(actor, "basis_conditioned_scoring", False):
-        logits = actor._score_from_embeddings(
-            pair_embedding,
-            model_inputs,
-            state,
-            state_feats,
-        )
-        return logits.squeeze(-1)
-
+def _head_logits_from_state(actor, pair_embedding, state, mask, state_feats=None):
     if state_feats is not None:
         state = actor.state_feature_combiner(state, state_feats)  
 
-    logits = actor.final_module(state, pair_embedding, mask, model_inputs=model_inputs)
+    logits = actor.final_module(state, pair_embedding, mask)
 
     return logits.squeeze(-1)
 
-def _head_logits_from_state_feats(actor, pair_embedding, state_feats, mask, state=None, model_inputs=None):
-    if getattr(actor, "state_routed_pair_embedding", False):
-        pair_embedding, _ = actor._compute_pair_embedding(
-            model_inputs,
-            state,
-            state_feats,
-            return_attention=False,
-        )
-    if getattr(actor, "pair_only_scoring", False):
-        logits = actor._score_from_embeddings(
-            pair_embedding,
-            model_inputs,
-            state,
-            state_feats,
-        )
-        return logits.squeeze(-1)
-    if getattr(actor, "basis_conditioned_scoring", False):
-        logits = actor._score_from_embeddings(
-            pair_embedding,
-            model_inputs,
-            state,
-            state_feats,
-        )
-        return logits.squeeze(-1)
-
+def _head_logits_from_state_feats(actor, pair_embedding, state_feats, mask, state=None):
     if state is not None:
         state = actor.state_feature_combiner(state, state_feats)
-        logits = actor.final_module(state, pair_embedding, mask, model_inputs=model_inputs)
+        logits = actor.final_module(state, pair_embedding, mask)
     else:
-        logits = actor.final_module(state_feats, pair_embedding, mask, model_inputs=model_inputs)
+        logits = actor.final_module(state_feats, pair_embedding, mask)
 
     return logits.squeeze(-1)
 
@@ -536,9 +465,6 @@ def run_actor_global_diagnostics(
             logits, pair_embedding, state_embedding, state_features_embedding = actor(input, return_internals=True, return_attention=return_attention)
             logits = logits.squeeze(-1)
 
-          skip_routed_counterfactuals = bool(getattr(actor, "state_routed_pair_embedding", False))
-          if skip_routed_counterfactuals:
-              metrics["cf_routed_pair_embedding_skipped"] = 1.0
 
           # Three cases depending on how the pairset is conditioned.
           if state_embedding is not None and state_features_embedding is not None:
@@ -555,24 +481,20 @@ def run_actor_global_diagnostics(
               perm = torch.randperm(state_features_embedding.shape[0], device=state_features_embedding.device)
               state_features_swap = state_features_embedding[perm]
 
-              if not skip_routed_counterfactuals:
-                  # compute the counterfactual diagnostics for the state by using the original state features
-                  state_logits_zero = _head_logits_from_state(actor, pair_embedding, state_zero, mask=input.P_mask, state_feats=state_features_embedding, model_inputs=input)
-                  state_logits_mean = _head_logits_from_state(actor, pair_embedding, state_mean, mask=input.P_mask, state_feats=state_features_embedding, model_inputs=input)
-                  state_logits_swap = _head_logits_from_state(actor, pair_embedding, state_swap, mask=input.P_mask, state_feats=state_features_embedding, model_inputs=input)
-
-                  metrics.update(_cf_metrics(logits, state_logits_zero, input.P_mask, prefix="cf_state_zero"))
-                  metrics.update(_cf_metrics(logits, state_logits_mean, input.P_mask, prefix="cf_state_mean"))
-                  metrics.update(_cf_metrics(logits, state_logits_swap, input.P_mask, prefix="cf_state_swap"))
-
-                  # compute the counterfactual diagnostics for the state features by using the original state features
-                  state_features_logits_zero = _head_logits_from_state_feats(actor, pair_embedding, state_features_zero, input.P_mask, state=state_embedding, model_inputs=input)
-                  state_features_logits_mean = _head_logits_from_state_feats(actor, pair_embedding, state_features_mean, input.P_mask, state=state_embedding, model_inputs=input)
-                  state_features_logits_swap = _head_logits_from_state_feats(actor, pair_embedding, state_features_swap, input.P_mask, state=state_embedding, model_inputs=input)
-
-                  metrics.update(_cf_metrics(logits, state_features_logits_zero, input.P_mask, prefix="cf_state_feats_zero"))
-                  metrics.update(_cf_metrics(logits, state_features_logits_mean, input.P_mask, prefix="cf_state_feats_mean"))
-                  metrics.update(_cf_metrics(logits, state_features_logits_swap, input.P_mask, prefix="cf_state_feats_swap"))
+              # compute the counterfactual diagnostics for the state by using the original state features
+              state_logits_zero = _head_logits_from_state(actor, pair_embedding, state_zero, mask=input.P_mask, state_feats=state_features_embedding)
+              state_logits_mean = _head_logits_from_state(actor, pair_embedding, state_mean, mask=input.P_mask, state_feats=state_features_embedding)
+              state_logits_swap = _head_logits_from_state(actor, pair_embedding, state_swap, mask=input.P_mask, state_feats=state_features_embedding)
+              metrics.update(_cf_metrics(logits, state_logits_zero, input.P_mask, prefix="cf_state_zero"))
+              metrics.update(_cf_metrics(logits, state_logits_mean, input.P_mask, prefix="cf_state_mean"))
+              metrics.update(_cf_metrics(logits, state_logits_swap, input.P_mask, prefix="cf_state_swap"))
+              # compute the counterfactual diagnostics for the state features by using the original state features
+              state_features_logits_zero = _head_logits_from_state_feats(actor, pair_embedding, state_features_zero, input.P_mask, state=state_embedding)
+              state_features_logits_mean = _head_logits_from_state_feats(actor, pair_embedding, state_features_mean, input.P_mask, state=state_embedding)
+              state_features_logits_swap = _head_logits_from_state_feats(actor, pair_embedding, state_features_swap, input.P_mask, state=state_embedding)
+              metrics.update(_cf_metrics(logits, state_features_logits_zero, input.P_mask, prefix="cf_state_feats_zero"))
+              metrics.update(_cf_metrics(logits, state_features_logits_mean, input.P_mask, prefix="cf_state_feats_mean"))
+              metrics.update(_cf_metrics(logits, state_features_logits_swap, input.P_mask, prefix="cf_state_feats_swap"))
 
               # norms (optional)
               metrics["state_norm"] = state_embedding.norm(dim=-1).mean().item()
@@ -588,15 +510,13 @@ def run_actor_global_diagnostics(
               perm = torch.randperm(state_embedding.shape[0], device=state_embedding.device)
               state_swap = state_embedding[perm]
 
-              if not skip_routed_counterfactuals:
-                  # recompute logits under counterfactuals using the SAME head logic as the actor
-                  logits_zero = _head_logits_from_state(actor, pair_embedding, state_zero, mask = input.P_mask, model_inputs=input)
-                  logits_mean = _head_logits_from_state(actor, pair_embedding, state_mean, mask = input.P_mask, model_inputs=input)
-                  logits_swap = _head_logits_from_state(actor, pair_embedding, state_swap, mask = input.P_mask, model_inputs=input)
-
-                  metrics.update(_cf_metrics(logits, logits_zero, input.P_mask, prefix="cf_state_zero"))
-                  metrics.update(_cf_metrics(logits, logits_mean, input.P_mask, prefix="cf_state_mean"))
-                  metrics.update(_cf_metrics(logits, logits_swap, input.P_mask, prefix="cf_state_swap"))
+              # recompute logits under counterfactuals using the SAME head logic as the actor
+              logits_zero = _head_logits_from_state(actor, pair_embedding, state_zero, mask = input.P_mask)
+              logits_mean = _head_logits_from_state(actor, pair_embedding, state_mean, mask = input.P_mask)
+              logits_swap = _head_logits_from_state(actor, pair_embedding, state_swap, mask = input.P_mask)
+              metrics.update(_cf_metrics(logits, logits_zero, input.P_mask, prefix="cf_state_zero"))
+              metrics.update(_cf_metrics(logits, logits_mean, input.P_mask, prefix="cf_state_mean"))
+              metrics.update(_cf_metrics(logits, logits_swap, input.P_mask, prefix="cf_state_swap"))
 
               # norms (optional)
               metrics["state_norm"] = state_embedding.norm(dim=-1).mean().item()
@@ -609,28 +529,23 @@ def run_actor_global_diagnostics(
               perm = torch.randperm(state_features_embedding.shape[0], device=state_features_embedding.device)
               state_features_swap = state_features_embedding[perm]
 
-              if not skip_routed_counterfactuals:
-                  # recompute logits under counterfactuals using the SAME head logic as the actor
-                  logits_zero = _head_logits_from_state_feats(actor, pair_embedding, state_features_zero, input.P_mask, model_inputs=input)
-                  logits_mean = _head_logits_from_state_feats(actor, pair_embedding, state_features_mean, input.P_mask, model_inputs=input)
-                  logits_swap = _head_logits_from_state_feats(actor, pair_embedding, state_features_swap, input.P_mask, model_inputs=input)
-
-                  metrics.update(_cf_metrics(logits, logits_zero, input.P_mask, prefix="cf_state_feats_zero"))
-                  metrics.update(_cf_metrics(logits, logits_mean, input.P_mask, prefix="cf_state_feats_mean"))
-                  metrics.update(_cf_metrics(logits, logits_swap, input.P_mask, prefix="cf_state_feats_swap"))
+              # recompute logits under counterfactuals using the SAME head logic as the actor
+              logits_zero = _head_logits_from_state_feats(actor, pair_embedding, state_features_zero, input.P_mask)
+              logits_mean = _head_logits_from_state_feats(actor, pair_embedding, state_features_mean, input.P_mask)
+              logits_swap = _head_logits_from_state_feats(actor, pair_embedding, state_features_swap, input.P_mask)
+              metrics.update(_cf_metrics(logits, logits_zero, input.P_mask, prefix="cf_state_feats_zero"))
+              metrics.update(_cf_metrics(logits, logits_mean, input.P_mask, prefix="cf_state_feats_mean"))
+              metrics.update(_cf_metrics(logits, logits_swap, input.P_mask, prefix="cf_state_feats_swap"))
 
               # norms (optional)
               metrics["state_feats_norm"] = state_features_embedding.norm(dim=-1).mean().item()
               metrics["pair_embed_norm"] = pair_embedding.norm(dim=-1).masked_select(input.P_mask).mean().item()
               metrics["state_feats_over_pair_norm_ratio"] = metrics["state_feats_norm"] / (metrics["pair_embed_norm"] + 1e-12)
 
-          elif getattr(actor, "pair_only_scoring", False):
+          elif actor.pair_only_scoring:
               metrics["pair_embed_norm"] = pair_embedding.norm(dim=-1).masked_select(input.P_mask).mean().item()
               metrics["pair_only_scoring_no_global_state_embedding"] = 1.0
 
-          elif getattr(actor, "basis_conditioned_scoring", False):
-              metrics["pair_embed_norm"] = pair_embedding.norm(dim=-1).masked_select(input.P_mask).mean().item()
-              metrics["basis_conditioned_scoring_no_global_state_embedding"] = 1.0
 
           else:
               raise ValueError("Invalid network structure for diagnostics.")
@@ -647,23 +562,16 @@ def run_actor_global_diagnostics(
             state_leaf = state_embedding.detach().requires_grad_(True)
             state_features_leaf = state_features_embedding.detach().requires_grad_(True)
 
-            logits2 = _head_logits_from_state(actor, pair_leaf, state_leaf, mask=input.P_mask, state_feats=state_features_leaf, model_inputs=input)  # (B,N)
+            logits2 = _head_logits_from_state(actor, pair_leaf, state_leaf, mask=input.P_mask, state_feats=state_features_leaf)  # (B,N)
 
         elif state_embedding is not None:
             state_leaf = state_embedding.detach().requires_grad_(True)
-            logits2 = _head_logits_from_state(actor, pair_leaf, state_leaf, mask=input.P_mask, model_inputs=input)  # (B,N)
+            logits2 = _head_logits_from_state(actor, pair_leaf, state_leaf, mask=input.P_mask)  # (B,N)
         elif state_features_embedding is not None:
             state_features_leaf = state_features_embedding.detach().requires_grad_(True)
-            logits2 = _head_logits_from_state_feats(actor, pair_leaf, state_features_leaf, mask=input.P_mask, model_inputs=input)  # (B,N)
-        elif getattr(actor, "pair_only_scoring", False):
-            logits2 = actor._score_from_embeddings(
-                pair_leaf,
-                input,
-                None,
-                None,
-            ).squeeze(-1)
-        elif getattr(actor, "basis_conditioned_scoring", False):
-            logits2 = actor._score_from_embeddings(
+            logits2 = _head_logits_from_state_feats(actor, pair_leaf, state_features_leaf, mask=input.P_mask)  # (B,N)
+        elif actor.pair_only_scoring:
+            logits2 = actor.score_from_embeddings(
                 pair_leaf,
                 input,
                 None,

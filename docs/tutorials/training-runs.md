@@ -1,163 +1,177 @@
 # Training Runs
 
-This tutorial shows how to launch training runs for a chosen ideal distribution using the public CLI.
+This tutorial shows how to launch training runs for a chosen ideal distribution from the command line.
 
 ## Before You Start
 
-Install the package:
+Install the package following [INSTALL.md](../../INSTALL.md).
+
+## Choose Heads, Then Override Settings
+
+After installing the package, run commands from the repository root using the Python environment where you installed it. The training script uses the configuration dataclasses directly:
 
 ```bash
-pip install -e .
+python run_training.py
 ```
 
-If you want Weights & Biases integration too, install the optional tracking dependency and log in:
+The default actor uses a `symmetric-per-entity-mlp` (SPEM) pair head, with both
+`actor.state_embedding_head` and `actor.state_features_embedding_head` set to
+`None`. A pair head is required. The critic has independent defaults: a Deep Set
+state head and an MLP state-feature head.
+
+Choose components independently:
+
+| Option | Choices | Actor default |
+| --- | --- | --- |
+| `--actor.pair-embedding-head` | `per-entity-mlp`, `symmetric-per-entity-mlp`, `alphastar-buchberger-pair-transformer` | `symmetric-per-entity-mlp` |
+| `--actor.state-embedding-head` | `deep-set`, `None` | `None` |
+| `--actor.state-features-embedding-head` | `mlp`, `None` | `None` |
+| `--actor.pair-combiner` | `film`, `sqa`, `concat` | `film` |
+| `--actor.state-combiner` | `film`, `concat` | `film` |
+
+Without either actor state head, the model automatically scores pair embeddings
+directly. With either state head, `pair-combiner` controls how state conditions
+pair scores. When both state heads are enabled, `state-combiner` combines their
+outputs first.
+
+All user-configurable fields in `config_dataclasses.py` are exposed under
+`--actor.*`, `--critic.*`, `--env.*`, and `--training.*`. Unspecified settings retain
+their dataclass defaults; selecting a head does not overwrite other choices.
+Input dimensions and batch sizes marked `init=False` are calculated at runtime.
+Use `True`/`False` for boolean options and `None` to disable optional values.
+Hyphenated names below correspond to underscores in the Python dataclasses.
 
 ```bash
-pip install -e ".[tracking]"
-wandb login
+# Inspect all options and defaults.
+python run_training.py --help
+
+# PEM with an MLP state-feature head and custom widths / learning rate.
+python run_training.py \
+  --actor.pair-embedding-head per-entity-mlp \
+  --actor.state-features-embedding-head mlp \
+  --actor.pair-embedding-head-out-dim 128 \
+  --training.learning-rate 0.0001
+
+# ASB with Deep Set state conditioning through SQA.
+python run_training.py \
+  --actor.pair-embedding-head alphastar-buchberger-pair-transformer \
+  --actor.state-embedding-head deep-set \
+  --actor.pair-combiner sqa
 ```
 
-## The Main Public Command
+Tracking is disabled by default, CUDA is used when available, and optional
+counterfactual/gradient/ranking diagnostics are disabled. Greedy evaluation runs
+on the training environment by default; enable NoPQ evaluation explicitly with
+`--training.hparam-eval-on-nopq-env True`. These are starting defaults, not a claim
+that one configuration performs best for every ideal distribution.
 
-The public training entrypoint is:
+## Observations and Diagnostic Info
 
-```bash
-deepgroebner-pytorch-cocoa-train
-```
+Both environments return observations containing `P`, `G`, `P_mask`, `G_mask`,
+and `state_features`. All pair heads encode endpoint features from `P`, which
+retains both endpoints even when the basis context in `G` is truncated by the priority queue.
 
-The most important options are:
+The priority-queue environment returns `P_idx_raw`, `P_sugar`, and
+`P_normal_rank` in the `info` dictionary for policy-versus-heuristic ranking
+diagnostics. `P_idx_raw` contains the original basis indices of each visible
+pair. These arrays describe the returned observation and are independent
+snapshots. Training stores them separately on the CPU only when
+`training.ranking_diagnostic_frequency` is positive.
 
-- `--architecture`: curated network preset. Supported values are `symmetric-per-entity-mlp`, `spem-deep-set`, and `spem-deep-set-state-features`.
-- `--ideal-distribution`: the ideal distribution to train on.
-- `--total-timesteps`: total environment steps.
-- `--num-envs`: number of parallel environments.
-- `--rollout-steps`: rollout length per PPO update.
-- `--priority-queue-strategy`: visible S-pair ordering strategy, such as `degree`, `normal`, `sugar`, or `first`.
-- `--observation-budget`: observation budget `N` for visible pairs and basis elements.
-- `--top-monomials`: number of leading monomials shown per polynomial.
-- `--greedy-eval-interval-steps`: how often fixed-corpus greedy evaluation runs during training. Set `0` or a negative value to disable it. If greedy-eval is causing hangups early in training, it is best to either increase this so that the policy has more time to improve or disable it altogether and perform eval on the final model.
-- `--greedy-eval-examples`: how many fixed eval examples to use when greedy evaluation is enabled.
-- `--track`: set to `True` to enable Weights & Biases.
-- `--verbosity`: terminal output level. Use `quiet`, `normal`, or `verbose`.
-- `--output-directory`: root directory for local logs and saved models.
-
-## Choosing An Architecture Preset
-
-Use `symmetric-per-entity-mlp` when you want the smallest supported policy setup:
-
-- symmetric per-entity MLP pair encoder
-- pair-only scoring
-- no deep-set state encoder
-- no separate state-feature encoder
-
-Use `spem-deep-set` when you want the default public setup:
-
-- symmetric per-entity MLP pair encoder
-- deep-set state encoder
-- FiLM pair combiner
-
-Use `spem-deep-set-state-features` when you want the richest curated setup:
-
-- symmetric per-entity MLP pair encoder
-- deep-set state encoder
-- MLP state-feature encoder
-- FiLM state and pair combiners
-
-To inspect the exact low-level trainer command before launching anything:
-
-```bash
-deepgroebner-pytorch-cocoa-train --dry-run True
-```
+Training environments reset in the same step when an episode ends. The main
+observation and info describe the new episode; the completed episode's data
+are available under `info["final_obs"]` and `info["final_info"]`.
 
 ## Common Training Runs
 
-Train the default public `spem-deep-set` preset on the default weighted distribution:
+Train SPEM with a Deep Set state head on a 3-20-10-weighted binomial distribution for 1,000,000 timesteps:
 
 ```bash
-deepgroebner-pytorch-cocoa-train \
-  --architecture spem-deep-set \
-  --ideal-distribution 3-20-10-weighted \
-  --total-timesteps 1000000 \
-  --num-envs 12 \
-  --track False \
-  --verbosity normal
+python run_training.py \
+  --actor.state-embedding-head deep-set \
+  --env.ideal-dist 3-20-10-weighted \
+  --training.total-timesteps 1000000 \
+  --training.num-envs 12 \
+  --training.track False \
+  --training.console-verbosity normal
 ```
 
-Train the lean pair-only preset instead:
+Train the default SPEM actor without either state head:
 
 ```bash
-deepgroebner-pytorch-cocoa-train \
-  --architecture symmetric-per-entity-mlp \
-  --ideal-distribution 3-20-10-weighted \
-  --total-timesteps 1000000 \
-  --num-envs 12 \
-  --track False
+python run_training.py \
+  --actor.pair-embedding-head symmetric-per-entity-mlp \
+  --env.ideal-dist 3-20-10-weighted \
+  --training.total-timesteps 1000000 \
+  --training.num-envs 12 \
+  --training.track False
 ```
 
-Train the fullest curated preset with both deep-set and state-feature encoders:
+Enable both the Deep Set and MLP state-feature heads:
 
 ```bash
-deepgroebner-pytorch-cocoa-train \
-  --architecture spem-deep-set-state-features \
-  --ideal-distribution 3-20-10-weighted \
-  --total-timesteps 1000000 \
-  --num-envs 12 \
-  --track False
+python run_training.py \
+  --actor.state-embedding-head deep-set \
+  --actor.state-features-embedding-head mlp \
+  --env.ideal-dist 3-20-10-weighted \
+  --training.total-timesteps 1000000 \
+  --training.num-envs 12 \
+  --training.track False
 ```
 
 Train on a geometric distribution:
 
 ```bash
-deepgroebner-pytorch-cocoa-train \
-  --architecture spem-deep-set \
-  --ideal-distribution 'geom-(3-5)' \
-  --total-timesteps 1000000 \
-  --num-envs 12
+python run_training.py \
+  --actor.state-embedding-head deep-set \
+  --env.ideal-dist 'geom-(3-5)' \
+  --training.total-timesteps 1000000 \
+  --training.num-envs 12
 ```
 
 Train on a benchmark family:
 
 ```bash
-deepgroebner-pytorch-cocoa-train \
-  --architecture spem-deep-set \
-  --ideal-distribution 'cyclic-(3-6)' \
-  --total-timesteps 1000000 \
-  --num-envs 12
+python run_training.py \
+  --actor.state-embedding-head deep-set \
+  --env.ideal-dist 'cyclic-(3-6)' \
+  --training.total-timesteps 1000000 \
+  --training.num-envs 12
 ```
 
 Train on a mixed benchmark family:
 
 ```bash
-deepgroebner-pytorch-cocoa-train \
-  --architecture spem-deep-set \
-  --ideal-distribution '(cyclic+eco)-(3-6)' \
-  --total-timesteps 1000000 \
-  --num-envs 12
+python run_training.py \
+  --actor.state-embedding-head deep-set \
+  --env.ideal-dist '(cyclic+eco)-(3-6)' \
+  --training.total-timesteps 1000000 \
+  --training.num-envs 12
 ```
 
 Change the visible pair/basis budget and queue strategy:
 
 ```bash
-deepgroebner-pytorch-cocoa-train \
-  --architecture spem-deep-set \
-  --ideal-distribution 3-20-10-weighted \
-  --observation-budget 150 \
-  --priority-queue-strategy sugar \
-  --top-monomials 3
+python run_training.py \
+  --actor.state-embedding-head deep-set \
+  --env.ideal-dist 3-20-10-weighted \
+  --env.N 150 \
+  --env.priority-queue-strategy sugar \
+  --env.k 3
 ```
 
 Write outputs to a dedicated experiment directory:
 
 ```bash
-deepgroebner-pytorch-cocoa-train \
-  --architecture spem-deep-set \
-  --ideal-distribution 3-20-10-weighted \
-  --output-directory runs/public_release/spem_deep_set_weighted
+python run_training.py \
+  --actor.state-embedding-head deep-set \
+  --env.ideal-dist 3-20-10-weighted \
+  --training.output-directory runs/public_release/spem_deep_set_weighted
 ```
 
 ## Local Tracking
 
-When `--track False`, the trainer still records local artifacts under:
+When `--training.track False`, the trainer still records local artifacts under:
 
 ```text
 runs/<run_name>/
@@ -180,21 +194,21 @@ The main local files are:
 
 ## Weights & Biases Tracking
 
-Enable W&B tracking by setting `--track True`:
+Enable W&B tracking by setting `--training.track True`:
 
 ```bash
-deepgroebner-pytorch-cocoa-train \
-  --architecture spem-deep-set \
-  --ideal-distribution 3-20-10-weighted \
-  --total-timesteps 1000000 \
-  --num-envs 12 \
-  --track True
+python run_training.py \
+  --actor.state-embedding-head deep-set \
+  --env.ideal-dist 3-20-10-weighted \
+  --training.total-timesteps 1000000 \
+  --training.num-envs 12 \
+  --training.track True
 ```
 
-The underlying trainer also supports W&B-specific settings. For example:
+The training script also supports W&B-specific settings. For example:
 
 ```bash
-python -m deepgroebner_pytorch_cocoa.ppo_masked \
+python run_training.py \
   --env.gym_id=BuchbergerExponents-v1 \
   --env.ideal_dist=3-20-10-weighted \
   --training.total_timesteps=1000000 \
@@ -210,14 +224,14 @@ python -m deepgroebner_pytorch_cocoa.ppo_masked \
   --actor.pair_combiner=film
 ```
 
-Use the public wrapper when you want the smaller supported interface. Use `python -m deepgroebner_pytorch_cocoa.ppo_masked` directly when you need advanced trainer-only flags such as W&B grouping or richer evaluation controls.
+Use `python run_training.py --help` to inspect options and their defaults.
 
 ## Training on a Fixed Ideal
 
-The small public wrapper does not expose fixed-ideal training directly. For that workflow, call the trainer with explicit basis data:
+Supply a fixed ideal using explicit basis data:
 
 ```bash
-python -m deepgroebner_pytorch_cocoa.ppo_masked \
+python run_training.py \
   --env.gym_id=BuchbergerExponents-v1 \
   --env.coeff_ring=QQ \
   --env.symbols=x,y \
@@ -232,3 +246,26 @@ python -m deepgroebner_pytorch_cocoa.ppo_masked \
 ```
 
 In that mode the environment no longer samples from `ideal_dist`; it reuses the basis you supplied.
+
+## Training from Python
+
+Use `train` to run the same trainer directly, without launching a subprocess:
+
+```python
+from deepgroebner_pytorch_cocoa.config_dataclasses import Config
+from deepgroebner_pytorch_cocoa.ppo_training import train
+
+cfg = Config()
+cfg.training.output_directory = "runs/my_experiment"
+result = train(cfg)
+
+print(result.summary["global_step"])
+print(result.checkpoint_paths)
+print(result.run_directory)
+```
+
+Each call resolves an independent copy of `cfg`. Environments and log files close
+when training finishes or raises an exception.
+
+For command-line training, use `python run_training.py`. It parses the same
+configuration and calls `train` directly in the current process.

@@ -23,6 +23,7 @@ and converts them into ideals that can be passed to Buchberger's algorithm */
 #include "CoCoA/library.H"
 #include "ideals.h"
 
+// helper functions for translating Laman graphs from their integer representation in the .txt files to a basis
 std::string toBinary(long n) //converts an long int (base 2) to string of that int (base 10)
 {
   std::string r;
@@ -117,9 +118,7 @@ std::vector<std::pair<int, int>> intToEdges(std::string nVertices, std::mt19937&
 namespace CoCoA
 {
 
-  std::vector<PPMonoidElem> basis(const PPMonoid& PPM, int n, int d);
-  std::discrete_distribution<int> degree_distribution(int n, int d, DistributionType dist, bool constants);
-
+  // functions for parsing input distributions 
   namespace {
 
     struct IntRange {

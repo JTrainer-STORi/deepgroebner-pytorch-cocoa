@@ -16,7 +16,6 @@ cdef extern from "buchberger.h" namespace "CoCoA":
         double value(string, double)
 
         vector[int] state
-        vector[int] P_idx
         vector[int] G_leads
         vector[float] state_feature_vector
         int cols
@@ -35,12 +34,8 @@ cdef extern from "buchberger.h" namespace "CoCoA":
         double value(string, double)
 
         vector[int] leads
-        vector[int] G_terms
-        vector[int] G_term_counts
-        int n_vars
         vector[int] G_padded
         vector[int] P_padded
-        vector[int] P_idx_padded
         vector[int] P_sugars_padded
         vector[int] P_normal_ranks_padded
         vector[int] G_mask

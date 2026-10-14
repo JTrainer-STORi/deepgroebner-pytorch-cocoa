@@ -109,36 +109,42 @@ pip install .
 
 Use this if you just want a normal install of the current checkout into your Python environment. If you later change the source files, you will need to reinstall by running this command again for those changes to take effect.
 
-## 4. Quick verification
-
-Run the installed verification command:
+By defaul the installation will not install the Weights & Biases library, to include it use:
 
 ```bash
-deepgroebner-pytorch-cocoa-verify
+pip install ".[tracking]"
 ```
 
-If the install is working, this command should:
 
-- import the Python package
-- import the compiled `wrapped` extension
-- reset and step both supported environments once
-- print one long `python -m deepgroebner_pytorch_cocoa.ppo_masked ...` training command
-- exit without a traceback or import error
+## 4. Quick verification
 
-A successful output will look roughly like:
+Install the test dependencies and run the checks from the repository root:
 
-```text
-OK package import: deepgroebner_pytorch_cocoa
-OK compiled extension import: deepgroebner_pytorch_cocoa.wrapped
-OK BuchbergerExponents-v1 reset/step: reward=-4.0 terminated=False truncated=False
-OK BuchbergerExponentsNoPQ-v1 reset/step: reward=-4.0 terminated=False truncated=False
-OK public train command: python -m deepgroebner_pytorch_cocoa.ppo_masked --env.gym_id=BuchbergerExponents-v1 ...
-Installation verification succeeded.
+```bash
+python -m pip install ".[dev]"
+python -m pytest -q
 ```
 
-The exact command line will be longer than this example, but the important thing is that all checks print `OK ...` lines and the final line is `Installation verification succeeded.`
+The tests exercise both native environments, the supported model heads, PPO
+training, and the three scripts. The script integration test generates a corpus,
+trains a small model, and evaluates its checkpoint on both environments.
 
+## 5. Run the programs
+
+From the repository root, use the same Python environment where you installed
+the package:
+
+```bash
+python run_training.py --help
+python generate_corpus.py --help
+python evaluate_model.py --help
 ```
+
+Use these three scripts directly for training, corpus generation, and evaluation.
+See the
+[training tutorial](docs/tutorials/training-runs.md) and
+[corpus and evaluation tutorial](docs/tutorials/eval-corpora-and-greedy-eval.md)
+for examples.
 
 ## Troubleshooting
 

@@ -7,7 +7,7 @@ from deepgroebner_pytorch_cocoa.wrapped import CGLeadMonomialsEnv, CNoPQEnv
 _BENCHMARK_CLASSES = {"katsura", "cyclic", "acyclic", "eco", "noon", "reimer"}
 
 
-def _split_top_level_dash(s: str) -> list[str]:
+def split_top_level_dash(s: str) -> list[str]:
     tokens: list[str] = []
     cur: list[str] = []
     depth = 0
@@ -35,7 +35,7 @@ def _split_top_level_dash(s: str) -> list[str]:
     return tokens
 
 
-def _parse_int_or_range_token(token: str, name: str) -> tuple[int, int]:
+def parse_int_or_range_token(token: str, name: str) -> tuple[int, int]:
     token = token.strip()
     if not token:
         raise ValueError(f"Malformed ideal_dist: empty token for {name}")
@@ -56,7 +56,7 @@ def _parse_int_or_range_token(token: str, name: str) -> tuple[int, int]:
     return value, value
 
 
-def _parse_class_list_token(token: str) -> list[str]:
+def parse_class_list_token(token: str) -> list[str]:
     token = token.strip()
     if token.startswith("("):
         if not token.endswith(")"):
@@ -81,12 +81,12 @@ def _parse_class_list_token(token: str) -> list[str]:
     return deduped
 
 
-def _parse_nvars_from_ideal_dist(ideal_dist: str) -> int:
+def parse_nvars_from_ideal_dist(ideal_dist: str) -> int:
     ideal_dist = ideal_dist.strip()
-    dist_args = _split_top_level_dash(ideal_dist)
+    dist_args = split_top_level_dash(ideal_dist)
 
     if len(dist_args) == 2 and dist_args[0] == "geom":
-        _, hi = _parse_int_or_range_token(dist_args[1], "n")
+        _, hi = parse_int_or_range_token(dist_args[1], "n")
         if hi < 3:
             raise ValueError(f"Malformed geom ideal_dist: {ideal_dist}. Expected n >= 3")
         # GeomIdealGenerator uses variables x2..xn and y3..yn.
@@ -94,12 +94,12 @@ def _parse_nvars_from_ideal_dist(ideal_dist: str) -> int:
 
     if len(dist_args) == 2 and dist_args[0] and (dist_args[0][0].isalpha() or 
         (dist_args[0][0] == "(" and len(dist_args[0]) > 1 and dist_args[0][1].isalpha())):
-        _, hi = _parse_int_or_range_token(dist_args[1], "n")
+        _, hi = parse_int_or_range_token(dist_args[1], "n")
         return hi
 
     if not dist_args:
         raise ValueError(f"Malformed ideal_dist: {ideal_dist}")
-    _, hi = _parse_int_or_range_token(dist_args[0], "n")
+    _, hi = parse_int_or_range_token(dist_args[0], "n")
     return hi
 
 
@@ -144,7 +144,7 @@ class BuchbergerEnvExponentsv1(gym.Env):
               raise ValueError("symbols must contain at least one variable name.")
       else:
           self.env = CGLeadMonomialsEnv(ideal_dist=ideal_dist, elimination=elimination, rewards=rewards, pq_strategy=pq_strategy, sort_input=sort_input, sort_reducers=sort_reducers, fix_ideal=fix_ideal, N=N, k=k, N_P=n_pair, N_G=n_basis)
-          self.n_vars = _parse_nvars_from_ideal_dist(ideal_dist)
+          self.n_vars = parse_nvars_from_ideal_dist(ideal_dist)
 
       self.N = N
       self.N_P = n_pair
@@ -155,10 +155,6 @@ class BuchbergerEnvExponentsv1(gym.Env):
       self.observation_space = gym.spaces.Dict({
           "G": gym.spaces.Box(low=0, high=np.inf, shape=(n_basis, k * self.n_vars), dtype=np.float32),
           "P": gym.spaces.Box(low=0, high=np.inf, shape=(n_pair, 2 * k * self.n_vars), dtype=np.float32),
-          "P_idx": gym.spaces.Box(low=-1, high=np.iinfo(np.int64).max, shape=(n_pair, 2), dtype=np.int64),
-          "P_idx_raw": gym.spaces.Box(low=-1, high=np.iinfo(np.int64).max, shape=(n_pair, 2), dtype=np.int64),
-          "P_sugar": gym.spaces.Box(low=0, high=np.inf, shape=(n_pair,), dtype=np.float32),
-          "P_normal_rank": gym.spaces.Box(low=0, high=np.inf, shape=(n_pair,), dtype=np.float32),
           "G_mask": gym.spaces.Box(low=0, high=1, shape=(n_basis,), dtype=np.bool_),
           "P_mask": gym.spaces.Box(low=0, high=1, shape=(n_pair,), dtype=np.bool_),
           "state_features": gym.spaces.Box(low=0, high =np.inf, shape =(14,), dtype=np.float32)
@@ -184,11 +180,6 @@ class BuchbergerEnvExponentsv1(gym.Env):
           "steps_since_basis_update"
       ]
     
-    def _get_info(self):
-        action_mask = np.array(self.state.any(axis=1), dtype=np.int8)
-        token_mask = np.array(self.state != 0, dtype=np.int8)
-        return {'action_mask': action_mask, 'token_mask': token_mask}
-
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
         self.env.seed(seed)
@@ -197,24 +188,15 @@ class BuchbergerEnvExponentsv1(gym.Env):
         self.total_reward = 0
         self.episode_length = 0
 
-        #info = self._get_info()
-        info = {}
-
         self.state = {
             "G": np.asarray(obs_dict["G"], dtype=np.float32),
             "P": np.asarray(obs_dict["P"], dtype=np.float32),
-            "P_idx": np.asarray(obs_dict["P_idx"], dtype=np.int64),
-            "P_idx_raw": np.asarray(obs_dict.get("P_idx_raw", obs_dict["P_idx"]), dtype=np.int64),
-            "P_sugar": np.asarray(obs_dict.get("P_sugar", np.zeros((self.N_P,), dtype=np.float32)), dtype=np.float32),
-            "P_normal_rank": np.asarray(obs_dict.get("P_normal_rank", np.zeros((self.N_P,), dtype=np.float32)), dtype=np.float32),
             "G_mask": np.asarray(obs_dict["G_mask"], dtype=np.bool_),
             "P_mask": np.asarray(obs_dict["P_mask"], dtype=np.bool_),
             "state_features": np.asarray(obs_dict["state_feats"], dtype=np.float32),
         }
 
-        info["pair_sugar"] = self.state["P_sugar"].copy()
-        info["pair_normal_rank"] = self.state["P_normal_rank"].copy()
-
+        info = {name: cenv_info[name] for name in ("P_idx_raw", "P_sugar", "P_normal_rank")}
         return self.state, info
 
     def step(self, action):
@@ -229,21 +211,15 @@ class BuchbergerEnvExponentsv1(gym.Env):
         self.state = {
             "G": np.asarray(obs_dict["G"], dtype=np.float32),
             "P": np.asarray(obs_dict["P"], dtype=np.float32),
-            "P_idx": np.asarray(obs_dict["P_idx"], dtype=np.int64),
-            "P_idx_raw": np.asarray(obs_dict.get("P_idx_raw", obs_dict["P_idx"]), dtype=np.int64),
-            "P_sugar": np.asarray(obs_dict.get("P_sugar", np.zeros((self.N_P,), dtype=np.float32)), dtype=np.float32),
-            "P_normal_rank": np.asarray(obs_dict.get("P_normal_rank", np.zeros((self.N_P,), dtype=np.float32)), dtype=np.float32),
             "G_mask": np.asarray(obs_dict["G_mask"], dtype=np.bool_),
             "P_mask": np.asarray(obs_dict["P_mask"], dtype=np.bool_),
             "state_features": np.asarray(obs_dict["state_feats"], dtype=np.float32),
         }
 
-        #info = self._get_info()
-        info = {
-            "pair_sugar": self.state["P_sugar"].copy(),
-            "pair_normal_rank": self.state["P_normal_rank"].copy(),
-        }
-
+        if terminated:
+            # Native buffers are reused on reset; preserve the terminal observation.
+            self.state = {name: value.copy() for name, value in self.state.items()}
+        info = {name: cenv_info[name] for name in ("P_idx_raw", "P_sugar", "P_normal_rank")}
         return self.state, reward, bool(terminated), truncated, info
     
     def value(self, strategy: str = 'degree', gamma: float = 1.0) -> float:
@@ -303,7 +279,7 @@ class BuchbergerEnvExponentsNoPQv1(gym.Env):
                 k=k,
                 return_dict=True,
             )
-            self.n_vars = _parse_nvars_from_ideal_dist(ideal_dist)
+            self.n_vars = parse_nvars_from_ideal_dist(ideal_dist)
         self.k = k
         self.g_dim = self.n_vars * self.k
         self.pair_dim = 2 * self.n_vars * self.k
@@ -312,10 +288,6 @@ class BuchbergerEnvExponentsNoPQv1(gym.Env):
         self.observation_space = gym.spaces.Dict({
             "P": gym.spaces.Sequence(
                 gym.spaces.Box(low=0, high=np.inf, shape=(self.pair_dim,), dtype=np.int32),
-                stack=True,
-            ),
-            "P_idx": gym.spaces.Sequence(
-                gym.spaces.Box(low=0, high=np.inf, shape=(2,), dtype=np.int32),
                 stack=True,
             ),
             "G": gym.spaces.Sequence(
@@ -350,7 +322,6 @@ class BuchbergerEnvExponentsNoPQv1(gym.Env):
 
     def _build_observation(self, obs_dict: dict) -> dict:
         P = self._coerce_matrix(obs_dict["P"], self.pair_dim)
-        P_idx = self._coerce_matrix(obs_dict["P_idx"], 2)
         G = self._coerce_matrix(obs_dict["G"], self.g_dim)
 
         state_features = np.asarray(obs_dict["state_feats"], dtype=np.float32)
@@ -358,7 +329,6 @@ class BuchbergerEnvExponentsNoPQv1(gym.Env):
             state_features = state_features.reshape(14,)
         return {
             "P": P,
-            "P_idx": P_idx,
             "G": G,
             "P_mask": np.ones((P.shape[0],), dtype=np.int8),
             "G_mask": np.ones((G.shape[0],), dtype=np.int8),
