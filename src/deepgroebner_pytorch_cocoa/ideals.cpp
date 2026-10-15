@@ -7,7 +7,6 @@ and converts them into ideals that can be passed to Buchberger's algorithm */
 
 #include <iostream>
 #include <fstream>
-#include <filesystem>
 #include <sstream>
 #include <cmath>
 #include <iomanip>
@@ -56,9 +55,9 @@ std::vector<std::pair<int, int>> intToEdges(
     std::mt19937& rng)
 {
   std::string line;
-  const std::string filepath = (
-      std::filesystem::path(laman_graph_directory) / ("LamanGraphs" + nVertices + ".txt")
-  ).string();
+  // Avoid std::filesystem's macOS 10.15 minimum when only joining path components.
+  const std::string filepath =
+      laman_graph_directory + "/LamanGraphs" + nVertices + ".txt";
   std::ifstream myfile (filepath);
   std::vector<long> record;
   std::vector<std::pair<int, int>> edges; // initialize vector of edges
