@@ -131,6 +131,8 @@ python -m pytest -q
 The tests exercise both native environments, the supported model heads, PPO
 training, and the three scripts. The script integration test generates a corpus,
 trains a small model, and evaluates its checkpoint on both environments.
+See [Testing](docs/testing.md) for focused PPO checks and comparisons against
+CoCoALib's own Groebner basis implementation.
 
 ## 5. Run the programs
 

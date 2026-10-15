@@ -21,6 +21,7 @@ See [INSTALL.md](INSTALL.md) for installation checks using pytest.
 
 - [Training Runs](docs/tutorials/training-runs.md)
 - [Eval Corpora And Greedy Evaluation](docs/tutorials/eval-corpora-and-greedy-eval.md)
+- [Hyperparameter Sweeps](docs/tutorials/hyperparameter-sweeps.md)
 
 Training, corpus generation, and checkpoint evaluation can also be called from
 notebooks or other Python projects using the installed package. See the corpus

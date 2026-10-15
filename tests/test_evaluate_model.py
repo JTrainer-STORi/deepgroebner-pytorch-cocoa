@@ -21,31 +21,47 @@ from deepgroebner_pytorch_cocoa.model_evaluation import (
 
 
 def test_resolve_corpus_symbols_keeps_single_width_corpus():
+    #arrange
     rows = [
         {"symbols": "x[0],x[1],x[2]"},
         {"symbols": "x[0],x[1],x[2]"},
     ]
-    assert _resolve_corpus_symbols(rows) == "x[0],x[1],x[2]"
+    #act
+    symbols = _resolve_corpus_symbols(rows)
+
+    #assert
+    assert symbols == "x[0],x[1],x[2]"
 
 
 def test_resolve_corpus_symbols_expands_to_widest_union():
+    #arrange
     rows = [
         {"symbols": "x[0],x[1],x[2]"},
         {"symbols": "x[0],x[1],x[2],x[3]"},
         {"symbols": "x[0],x[1]"},
     ]
-    assert _resolve_corpus_symbols(rows) == "x[0],x[1],x[2],x[3]"
+    #act
+    symbols = _resolve_corpus_symbols(rows)
+
+    #assert
+    assert symbols == "x[0],x[1],x[2],x[3]"
 
 
 def test_resolve_corpus_symbols_handles_geom_style_names():
+    #arrange
     rows = [
         {"symbols": "x2,x3,x4,y3,y4"},
         {"symbols": "x2,x3,x4,x5,y3,y4,y5"},
     ]
-    assert _resolve_corpus_symbols(rows) == "x2,x3,x4,x5,y3,y4,y5"
+    #act
+    symbols = _resolve_corpus_symbols(rows)
+
+    #assert
+    assert symbols == "x2,x3,x4,x5,y3,y4,y5"
 
 
 def test_load_actor_round_trips_current_pair_scoring_head(tmp_path):
+    #arrange
     actor_cfg_dict = {
         "state_embedding_head": None,
         "state_features_embedding_head": None,
@@ -70,15 +86,6 @@ def test_load_actor_round_trips_current_pair_scoring_head(tmp_path):
             "P": gym.spaces.Box(low=-1.0, high=1.0, shape=(7, 6)),
         }
     )
-    loaded_actor = _load_actor(
-        actor_cfg_dict,
-        env,
-        checkpoint_path,
-        torch.device("cpu"),
-    )
-
-    assert isinstance(loaded_actor.final_module, torch.nn.Sequential)
-
     inputs = ModelInputs(
         P=torch.tensor(
             [
@@ -95,11 +102,24 @@ def test_load_actor_round_trips_current_pair_scoring_head(tmp_path):
         state_features=torch.randn(1, 4),
     )
 
+    #act
+    loaded_actor = _load_actor(
+        actor_cfg_dict,
+        env,
+        checkpoint_path,
+        torch.device("cpu"),
+    )
     with torch.no_grad():
-        torch.testing.assert_close(loaded_actor(inputs), original_actor(inputs))
+        loaded_predictions = loaded_actor(inputs)
+        original_predictions = original_actor(inputs)
+
+    #assert
+    assert isinstance(loaded_actor.final_module, torch.nn.Sequential)
+    torch.testing.assert_close(loaded_predictions, original_predictions)
 
 
 def test_resolve_model_path_filters_best_greedy_eval_vs_final(tmp_path):
+    #arrange
     models_dir = tmp_path / "models"
     models_dir.mkdir()
     best_path = models_dir / "run__abc123__best_greedy_eval.pt"
@@ -107,17 +127,19 @@ def test_resolve_model_path_filters_best_greedy_eval_vs_final(tmp_path):
     best_path.touch()
     final_path.touch()
 
-    assert (
-        _resolve_model_path("abc123", models_dir, checkpoint_type="best_greedy_eval")
-        == best_path.resolve()
+    #act
+    resolved_best = _resolve_model_path(
+        "abc123", models_dir, checkpoint_type="best_greedy_eval"
     )
-    assert (
-        _resolve_model_path("abc123", models_dir, checkpoint_type="final")
-        == final_path.resolve()
-    )
+    resolved_final = _resolve_model_path("abc123", models_dir, checkpoint_type="final")
+
+    #assert
+    assert resolved_best == best_path.resolve()
+    assert resolved_final == final_path.resolve()
 
 
 def test_extract_run_id_handles_best_greedy_eval_suffix():
+    #arrange
     best_path = Path(
         "BuchbergerExponents__3-20-10-weighted__20260524_012455__j77pf3uu__best_greedy_eval.pt"
     )
@@ -125,46 +147,82 @@ def test_extract_run_id_handles_best_greedy_eval_suffix():
         "BuchbergerExponents__3-20-10-weighted__20260524_012455__j77pf3uu.pt"
     )
 
-    assert _extract_run_id(best_path) == "j77pf3uu"
-    assert _extract_run_id(final_path) == "j77pf3uu"
+    #act
+    best_run_id = _extract_run_id(best_path)
+    final_run_id = _extract_run_id(final_path)
+
+    #assert
+    assert best_run_id == "j77pf3uu"
+    assert final_run_id == "j77pf3uu"
 
 
 def test_normalize_gym_id_maps_legacy_aliases():
-    assert _normalize_gym_id("BuchbergerExponents") == "BuchbergerExponents-v1"
-    assert _normalize_gym_id("BuchbergerExponentsNoPQ") == "BuchbergerExponentsNoPQ-v1"
-    assert _normalize_gym_id("BuchbergerExponents-v1") == "BuchbergerExponents-v1"
-    assert _normalize_gym_id(None) is None
+    #arrange
+    legacy_pq = "BuchbergerExponents"
+    legacy_no_pq = "BuchbergerExponentsNoPQ"
+    current = "BuchbergerExponents-v1"
+
+    #act
+    normalized_pq = _normalize_gym_id(legacy_pq)
+    normalized_no_pq = _normalize_gym_id(legacy_no_pq)
+    normalized_current = _normalize_gym_id(current)
+    normalized_missing = _normalize_gym_id(None)
+
+    #assert
+    assert normalized_pq == "BuchbergerExponents-v1"
+    assert normalized_no_pq == "BuchbergerExponentsNoPQ-v1"
+    assert normalized_current == "BuchbergerExponents-v1"
+    assert normalized_missing is None
 
 
 def test_resolve_config_path_prefers_sidecar_config_json(tmp_path):
+    #arrange
     model_path = tmp_path / "run__abc123.pt"
     model_path.touch()
     config_path = tmp_path / "run__abc123__config.json"
     config_path.write_text("{}", encoding="utf-8")
 
+    #act
     resolved = _resolve_config_path(None, model_path, tmp_path / "wandb", "abc123")
+
+    #assert
     assert resolved == config_path.resolve()
 
 
 def test_unwrap_config_section_supports_nested_and_plain_dicts():
+    #arrange
     nested = {"env": {"value": {"gym_id": "BuchbergerExponents-v1"}}}
     plain = {"env": {"gym_id": "BuchbergerExponents-v1"}}
 
-    assert _unwrap_config_section(nested, "env") == {"gym_id": "BuchbergerExponents-v1"}
-    assert _unwrap_config_section(plain, "env") == {"gym_id": "BuchbergerExponents-v1"}
+    #act
+    nested_env = _unwrap_config_section(nested, "env")
+    plain_env = _unwrap_config_section(plain, "env")
+
+    #assert
+    assert nested_env == {"gym_id": "BuchbergerExponents-v1"}
+    assert plain_env == {"gym_id": "BuchbergerExponents-v1"}
 
 
 def test_get_state_feature_names_falls_back_to_default():
+    #arrange
     env = SimpleNamespace(unwrapped=SimpleNamespace())
+
+    #act
     names = _get_state_feature_names(env)
 
+    #assert
     assert names[1] == "P_cardinality"
     assert names[12] == "n_pairs_processed"
 
 
 def test_compute_queue_usage_stats_tracks_binding_and_overflow():
-    stats = _compute_queue_usage_stats([3.0, 7.0, 9.0], pq_budget=5)
+    #arrange
+    pair_counts = [3.0, 7.0, 9.0]
 
+    #act
+    stats = _compute_queue_usage_stats(pair_counts, pq_budget=5)
+
+    #assert
     assert stats["pair_count_mean"] == 19.0 / 3.0
     assert stats["pair_count_median"] == 7.0
     assert stats["pair_count_min"] == 3.0
@@ -177,6 +235,7 @@ def test_compute_queue_usage_stats_tracks_binding_and_overflow():
 
 
 def test_build_queue_usage_summary_aggregates_episode_stats():
+    #arrange
     rows = [
         {
             "pair_count_mean": 4.0,
@@ -202,8 +261,10 @@ def test_build_queue_usage_summary_aggregates_episode_stats():
         },
     ]
 
+    #act
     summary = _build_queue_usage_summary(rows)
 
+    #assert
     assert summary["pq_budget"] == 5
     assert summary["pair_count_mean"]["mean"] == 5.0
     assert summary["pair_count_max"]["max"] == 9.0

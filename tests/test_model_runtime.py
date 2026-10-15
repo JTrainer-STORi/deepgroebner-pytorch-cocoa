@@ -17,8 +17,13 @@ from deepgroebner_pytorch_cocoa.model_input_utils import (
 
 
 def test_experimental_heuristic_choice_env_is_not_registered():
+    #arrange
+    gym_id = "BuchbergerHeuristicChoice-v1"
+
+    #act
+    #assert
     with pytest.raises(gym.error.NameNotFound):
-        gym.spec("BuchbergerHeuristicChoice-v1")
+        gym.spec(gym_id)
 
 
 def _inputs():
@@ -46,6 +51,7 @@ def _config(config_type, activation="gelu", **kwargs):
 @pytest.mark.parametrize("activation", ["relu", "gelu", "selu", "tanh"])
 @pytest.mark.parametrize("combiner", ["film", "concat"])
 def test_configured_activations_support_actor_and_critic_forward_backward(activation, combiner):
+    #arrange
     inputs = _inputs()
     actor = CombinedPolicyNetwork(_config(
         ActorConfig, activation,
@@ -53,12 +59,19 @@ def test_configured_activations_support_actor_and_critic_forward_backward(activa
         state_combiner=combiner, pair_combiner=combiner,
     ))
     critic = CombinedValueNetwork(_config(CriticConfig, activation, state_combiner=combiner))
+    #act
     logits = actor(inputs)
     values, delta, _ = critic(inputs)
+
+    #assert
     assert torch.isfinite(logits).all()
     assert torch.isfinite(values).all()
     torch.testing.assert_close(values, delta)
+
+    #act
     (logits[inputs.P_mask].sum() + values.sum()).backward()
+
+    #assert
     for model in (actor, critic):
         grads = [p.grad for p in model.parameters() if p.grad is not None]
         assert grads
@@ -72,6 +85,7 @@ def test_configured_activations_support_actor_and_critic_forward_backward(activa
 def test_current_actor_heads_emit_finite_counterfactual_gradient_and_attention_metrics(
     combiner, state_head, feature_head,
 ):
+    #arrange
     actor = CombinedPolicyNetwork(_config(
         ActorConfig, state_embedding_head=state_head,
         state_features_embedding_head=feature_head,
@@ -79,23 +93,32 @@ def test_current_actor_heads_emit_finite_counterfactual_gradient_and_attention_m
     ))
     metrics = {}
     writer = SimpleNamespace(add_scalar=lambda tag, value, step: metrics.update({tag: value}))
+
+    #act
     run_actor_global_diagnostics(actor, _inputs(), writer, 1, 10, diag_every=1, grad_every=1)
+
+    #assert
     assert metrics
     assert all(np.isfinite(value) for value in metrics.values())
-    assert "diagnostics/pair_embed_sens" in metrics
-    assert any(key.startswith("diagnostics/attn_pair_embedding_head_") for key in metrics)
+    assert "algorithm_policy/diagnostic_pair_embed_sens" in metrics
+    assert any(
+        key.startswith("algorithm_policy/diagnostic_attn_pair_embedding_head_")
+        for key in metrics
+    )
+    assert all(key.startswith("algorithm_policy/diagnostic_") for key in metrics)
     if state_head:
-        assert "diagnostics/cf_state_zero_kl" in metrics
-        assert "diagnostics/state_grad_sens" in metrics
+        assert "algorithm_policy/diagnostic_cf_state_zero_kl" in metrics
+        assert "algorithm_policy/diagnostic_state_grad_sens" in metrics
     if feature_head:
-        assert "diagnostics/cf_state_feats_zero_kl" in metrics
-        assert "diagnostics/state_features_grad_sens" in metrics
+        assert "algorithm_policy/diagnostic_cf_state_feats_zero_kl" in metrics
+        assert "algorithm_policy/diagnostic_state_features_grad_sens" in metrics
     assert actor.training
     assert all(p.grad is None for p in actor.parameters())
 
 
 @pytest.mark.parametrize("gym_id", ["BuchbergerExponents-v1", "BuchbergerExponentsNoPQ-v1"])
 def test_native_observations_survive_single_batched_and_minibatch_conversion(gym_id):
+    #arrange
     device = torch.device("cpu")
     env = gym.make(
         gym_id, coeff_ring="QQ", symbols="x,y",
@@ -105,24 +128,39 @@ def test_native_observations_survive_single_batched_and_minibatch_conversion(gym
         obs, _ = env.reset(seed=123)
         first = build_model_inputs_from_single_obs(obs, device)
         action = int(np.flatnonzero(obs["P_mask"])[0])
+
+        #act
         next_obs, reward, _, _, _ = env.step(action)
+
+        #assert
         assert np.isfinite(reward)
+
+        #arrange
         second = build_model_inputs_from_single_obs(next_obs, device)
         batched_obs = {
             key: (value,) if "NoPQ" in gym_id and key != "state_features" else value[None]
             for key, value in next_obs.items()
         }
+
+        #act
         batched = build_model_inputs_from_batched_obs(batched_obs, device)
+
+        #assert
         for key in ("P", "G", "P_mask", "G_mask", "state_features"):
             torch.testing.assert_close(getattr(batched, key), getattr(second, key))
 
+        #arrange
         records = [first, second]
+
+        #act
         collated = collate_ragged_model_inputs(
             indices=[1, 0], device=device,
             obs_G_list=[r.G[0] for r in records], obs_P_list=[r.P[0] for r in records],
             g_mask_list=[r.G_mask[0] for r in records], p_mask_list=[r.P_mask[0] for r in records],
             obs_sf_list=[r.state_features[0] for r in records],
         )
+
+        #assert
         for row, record in enumerate(reversed(records)):
             for key in ("P", "G", "P_mask", "G_mask", "state_features"):
                 expected = getattr(record, key)[0]

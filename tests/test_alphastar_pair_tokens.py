@@ -30,6 +30,7 @@ def _config(use_lcm_gcd):
 def test_native_pairs_with_hidden_endpoints_keep_attention_and_gradient_signal(
     basis_budget, use_lcm_gcd
 ):
+    #arrange
     torch.manual_seed(123)
     env = gym.make(
         "BuchbergerExponents-v1",
@@ -52,17 +53,29 @@ def test_native_pairs_with_hidden_endpoints_keep_attention_and_gradient_signal(
         visible_endpoints = (
             endpoint_matches & inputs.G_mask[:, None, None, :]
         ).any(dim=-1)
+
+        #act
         missing_endpoints = inputs.P_mask & ~visible_endpoints.all(dim=-1)
+
+        #assert
         assert missing_endpoints.any()
 
+        #arrange
         actor = CombinedPolicyNetwork(_config(use_lcm_gcd))
+
+        #act
         tokens, mask = actor.pair_embedding_head.net._build_pair_tokens(inputs)
+
+        #assert
         torch.testing.assert_close(mask, inputs.P_mask)
         assert (tokens[missing_endpoints].abs().sum(dim=-1) > 0).all()
 
+        #act
         logits, embeddings, _, _, attention = actor(
             inputs, return_internals=True, return_attention=True
         )
+
+        #assert
         assert (embeddings[missing_endpoints].abs().sum(dim=-1) > 0).all()
         for block in attention["pair_embedding_head"].values():
             torch.testing.assert_close(block["q_mask"], inputs.P_mask)
@@ -70,7 +83,10 @@ def test_native_pairs_with_hidden_endpoints_keep_attention_and_gradient_signal(
             row_sums = block["weights"][0, :, inputs.P_mask[0]].sum(dim=-1)
             torch.testing.assert_close(row_sums, torch.ones_like(row_sums))
 
+        #act
         logits[missing_endpoints].sum().backward()
+
+        #assert
         assert torch.isfinite(inputs.P.grad).all()
         assert (inputs.P.grad[missing_endpoints].abs().sum(dim=-1) > 0).all()
     finally:
@@ -82,6 +98,7 @@ def test_native_pairs_with_hidden_endpoints_keep_attention_and_gradient_signal(
 def test_pair_only_policy_requires_only_pair_vectors_and_the_action_mask(
     use_lcm_gcd, basis_context
 ):
+    #arrange
     torch.manual_seed(123)
     actor = CombinedPolicyNetwork(_config(use_lcm_gcd)).eval()
     pairs = torch.tensor([[[2.0, 0.0, 1.0, 1.0], [1.0, 1.0, 0.0, 2.0]]])
@@ -96,7 +113,10 @@ def test_pair_only_policy_requires_only_pair_vectors_and_the_action_mask(
         inputs.G = torch.empty(1, 0, 2)
         inputs.G_mask = torch.empty(1, 0, dtype=torch.bool)
 
+    #act
     actual = actor(inputs)
+
+    #assert
     assert actor.pair_only_scoring
     assert actual.shape == (1, 2, 1)
     assert torch.isfinite(actual).all()
@@ -105,6 +125,7 @@ def test_pair_only_policy_requires_only_pair_vectors_and_the_action_mask(
 
 @pytest.mark.parametrize("use_lcm_gcd", [False, True])
 def test_pair_scores_are_symmetric_and_ignore_padding(use_lcm_gcd):
+    #arrange
     torch.manual_seed(123)
     actor = CombinedPolicyNetwork(_config(use_lcm_gcd)).eval()
     pairs = torch.tensor([[[2.0, 0.0, 1.0, 1.0], [1.0, 1.0, 0.0, 2.0]]])
@@ -112,14 +133,23 @@ def test_pair_scores_are_symmetric_and_ignore_padding(use_lcm_gcd):
     reference = actor(ModelInputs(P=pairs, P_mask=mask))
 
     swapped = torch.cat((pairs[..., 2:], pairs[..., :2]), dim=-1)
-    torch.testing.assert_close(actor(ModelInputs(P=swapped, P_mask=mask)), reference)
 
+    #act
+    swapped_logits = actor(ModelInputs(P=swapped, P_mask=mask))
+
+    #assert
+    torch.testing.assert_close(swapped_logits, reference)
+
+    #arrange
     padded_pairs = torch.cat((pairs, torch.full((1, 1, 4), 100.0)), dim=1)
     inputs = ModelInputs(
         P=torch.cat((padded_pairs, torch.full_like(padded_pairs, 200.0)), dim=0),
         P_mask=torch.tensor([[True, True, False], [False, False, False]]),
     )
+    #act
     logits = actor(inputs)
+
+    #assert
     assert torch.isfinite(logits).all()
     torch.testing.assert_close(logits[:1, :2], reference)
     assert torch.count_nonzero(logits[~inputs.P_mask]) == 0

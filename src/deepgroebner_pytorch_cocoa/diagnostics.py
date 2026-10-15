@@ -7,9 +7,7 @@ from deepgroebner_pytorch_cocoa.model_input_utils import build_model_inputs_from
 
 
 def _diagnostic_metric_name(key: str) -> str:
-    if key == "ranking_metrics_present":
-        return "diagnostics/ranking_metrics_present"
-    return f"diagnostics/{key}"
+    return f"algorithm_policy/diagnostic_{key}"
 
 
 def _log_diagnostic_metrics(writer, metrics: dict, global_step: int):

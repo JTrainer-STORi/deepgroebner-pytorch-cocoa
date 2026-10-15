@@ -22,6 +22,23 @@ from .local_logging import make_summary_writer
 
 _VERBOSITY_LEVELS = {"quiet": 0, "normal": 1, "verbose": 2}
 
+_SYSTEM_METRIC_TAGS = {
+    "elapsed_seconds": "performance/elapsed_seconds",
+    "process_cpu_user_seconds": "system_cpu/process_user_seconds",
+    "process_cpu_system_seconds": "system_cpu/process_system_seconds",
+    "process_cpu_total_seconds": "system_cpu/process_total_seconds",
+    "process_cpu_percent": "system_cpu/process_utilization_percent",
+    "rss_gib": "system_memory/process_rss_gib",
+    "rss_hwm_gib": "system_memory/process_peak_rss_gib",
+    "vms_gib": "system_memory/process_virtual_gib",
+    "swap_gib": "system_memory/process_swap_gib",
+    "cuda_enabled": "system_gpu/cuda_enabled",
+    "cuda_memory_allocated_gib": "system_gpu/memory_allocated_gib",
+    "cuda_memory_reserved_gib": "system_gpu/memory_reserved_gib",
+    "cuda_max_memory_allocated_gib": "system_gpu/peak_memory_allocated_gib",
+    "cuda_max_memory_reserved_gib": "system_gpu/peak_memory_reserved_gib",
+}
+
 
 def resolve_training_config(cfg: Config) -> Config:
     """Function for versifying that all of the arguments to the config are acceptable and setting config arguments like batch_size and minibatch_size that depend on other config options"""
@@ -56,6 +73,14 @@ def resolve_training_config(cfg: Config) -> Config:
     return cfg
 
 
+def get_training_output_directory(cfg: Config) -> Path:
+    """Resolve the shared root for managed run outputs without changing the config."""
+    output_directory = Path(cfg.training.output_directory or "")
+    if cfg.training.group is not None:
+        output_directory /= cfg.training.group
+    return output_directory
+
+
 def create_run_writer(cfg: Config):
     """Generates the run name and directory for storing run data. Creates a  writer object for tracking run data"""
 
@@ -84,10 +109,7 @@ def create_run_writer(cfg: Config):
     if cfg.training.track:
         init_wandb_run(cfg, run_name, wandb_id)
 
-    log_dir = Path(cfg.training.output_directory or "") / "runs"
-
-    if cfg.training.wandb_group is not None:
-        log_dir /= cfg.training.wandb_group # /= operator joins path components for a pathlib.Path
+    log_dir = get_training_output_directory(cfg) / "runs"
 
     writer = make_summary_writer(
         str(log_dir / run_name), mirror_to_wandb=cfg.training.track, wandb_module=wandb
@@ -191,13 +213,23 @@ def print_update_summary(
 
 
 def log_system_metrics(writer, record: dict[str, object], global_step: int):
+    """Route hardware, throughput, and environment samples to their sections.
+
+    Raw timestamps and byte counts stay in system_metrics.jsonl; scalar plots
+    use elapsed time and GiB to avoid duplicate curves for the same quantity.
+    """
     for key, value in record.items():
-        if key in {"global_step", "policy_updates", "timestamp_utc"}:
+        tag = (
+            f"evaluation_training/{key}"
+            if key.startswith("rollout_")
+            else _SYSTEM_METRIC_TAGS.get(key)
+        )
+        if tag is None:
             continue
         if isinstance(value, bool):
-            writer.add_scalar(f"system/{key}", 1.0 if value else 0.0, global_step)
+            writer.add_scalar(tag, 1.0 if value else 0.0, global_step)
         elif isinstance(value, (int, float)) and np.isfinite(value):
-            writer.add_scalar(f"system/{key}", value, global_step)
+            writer.add_scalar(tag, value, global_step)
 
 
 def tensor_stat_to_float(x: torch.Tensor):
@@ -228,36 +260,29 @@ def save_model_checkpoints(
     cfg, agent, run_name: str, checkpoint_suffix: str | None = None
 ) -> dict[str, str]:
     """Saves configured actor/critic checkpoints and companion config snapshots."""
-    model_group_subdir = (
-        cfg.training.wandb_group if cfg.training.wandb_group is not None else ""
-    )
-    output_dir = (
-        cfg.training.output_directory
-        if cfg.training.output_directory is not None
-        else ""
-    )
+    output_dir = get_training_output_directory(cfg)
     checkpoint_stem = (
         run_name if checkpoint_suffix is None else f"{run_name}__{checkpoint_suffix}"
     )
     saved_paths = {}
 
     if cfg.training.save_actor:
-        actor_dir = os.path.join(output_dir, "models", "actors", model_group_subdir)
-        os.makedirs(actor_dir, exist_ok=True)
-        actor_model_path = os.path.join(actor_dir, f"{checkpoint_stem}.pt")
+        actor_dir = output_dir / "models" / "actors"
+        actor_dir.mkdir(parents=True, exist_ok=True)
+        actor_model_path = str(actor_dir / f"{checkpoint_stem}.pt")
         torch.save(agent.actor.state_dict(), actor_model_path)
         save_config_snapshot(
-            cfg, os.path.join(actor_dir, f"{checkpoint_stem}__config.json")
+            cfg, str(actor_dir / f"{checkpoint_stem}__config.json")
         )
         saved_paths["actor"] = actor_model_path
 
     if cfg.critic.critic_strategy != "heuristic-only" and cfg.training.save_critic:
-        critic_dir = os.path.join(output_dir, "models", "critics", model_group_subdir)
-        os.makedirs(critic_dir, exist_ok=True)
-        critic_model_path = os.path.join(critic_dir, f"{checkpoint_stem}.pt")
+        critic_dir = output_dir / "models" / "critics"
+        critic_dir.mkdir(parents=True, exist_ok=True)
+        critic_model_path = str(critic_dir / f"{checkpoint_stem}.pt")
         torch.save(agent.critic.state_dict(), critic_model_path)
         save_config_snapshot(
-            cfg, os.path.join(critic_dir, f"{checkpoint_stem}__config.json")
+            cfg, str(critic_dir / f"{checkpoint_stem}__config.json")
         )
         saved_paths["critic"] = critic_model_path
 
@@ -282,20 +307,15 @@ def init_wandb_run(cfg: Config, run_name: str, wandb_id: str):
         save_code=True,
         settings=wandb.Settings(init_timeout=cfg.training.wandb_init_timeout),
     )
-    if cfg.training.wandb_group is not None:
-        base_wandb_dir = (
-            cfg.training.output_directory
-            if cfg.training.output_directory is not None
-            else "wandb"
-        )
-        grouped_wandb_dir = os.path.join(base_wandb_dir, cfg.training.wandb_group)
-        os.makedirs(grouped_wandb_dir, exist_ok=True)
-        init_kwargs["dir"] = grouped_wandb_dir
-    elif cfg.training.output_directory is not None:
-        os.makedirs(cfg.training.output_directory, exist_ok=True)
-        init_kwargs["dir"] = cfg.training.output_directory
-    if cfg.training.wandb_group is not None:
-        init_kwargs["group"] = cfg.training.wandb_group
+    if (
+        cfg.training.output_directory is not None
+        or cfg.training.group is not None
+    ):
+        output_dir = get_training_output_directory(cfg)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        init_kwargs["dir"] = str(output_dir)
+    if cfg.training.group is not None:
+        init_kwargs["group"] = cfg.training.group
     # In sweep runs, W&B injects parameter config already; avoid duplicate keys.
     if not is_sweep_run:
         init_kwargs["config"] = _jsonify_config_value(asdict(cfg))

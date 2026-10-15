@@ -14,6 +14,7 @@ cdef extern from "buchberger.h" namespace "CoCoA":
         double step(int)
         void set_seed(int)
         double value(string, double)
+        bint is_groebner_basis() except +
 
         vector[int] state
         vector[int] G_leads
@@ -32,6 +33,7 @@ cdef extern from "buchberger.h" namespace "CoCoA":
         double step(int)
         void set_seed(int)
         double value(string, double)
+        bint is_groebner_basis() except +
 
         vector[int] leads
         vector[int] G_padded

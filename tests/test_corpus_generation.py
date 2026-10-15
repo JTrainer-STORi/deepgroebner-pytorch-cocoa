@@ -40,12 +40,16 @@ def _read_rows(path):
 def test_fixed_corpus_api_returns_written_rows_from_another_directory(
     monkeypatch, tmp_path
 ):
+    #arrange
     monkeypatch.chdir(tmp_path)
     cfg = _fixed_config(output_path="corpora/fixed.jsonl")
     original_config = asdict(cfg)
+    expected_basis = [entry.replace(" ", "") for entry in FIXED_BASIS.split(",")]
 
+    #act
     result = generate_corpus(cfg)
 
+    #assert
     assert isinstance(result, CorpusGenerationResult)
     assert result.generated is True
     assert result.corpus_path == str(tmp_path / "corpora" / "fixed.jsonl")
@@ -57,9 +61,7 @@ def test_fixed_corpus_api_returns_written_rows_from_another_directory(
     assert row["distribution"] is None
     assert row["coeff_ring"] == "QQ"
     assert row["symbols"] == "x,y"
-    assert [entry.replace(" ", "") for entry in row["basis_elements"]] == [
-        entry.replace(" ", "") for entry in FIXED_BASIS.split(",")
-    ]
+    assert [entry.replace(" ", "") for entry in row["basis_elements"]] == expected_basis
     assert asdict(cfg) == original_config
     assert Path.cwd() == tmp_path
 
@@ -67,17 +69,20 @@ def test_fixed_corpus_api_returns_written_rows_from_another_directory(
 def test_geometric_corpus_api_uses_bundled_graphs_from_another_directory(
     monkeypatch, tmp_path
 ):
+    #arrange
     monkeypatch.chdir(tmp_path)
-    result = generate_corpus(
-        CorpusConfig(
-            ideal_distribution="geom-3",
-            examples=1,
-            seed=123,
-            elimination="none",
-            output_path="corpora/triangle.jsonl",
-        )
+    cfg = CorpusConfig(
+        ideal_distribution="geom-3",
+        examples=1,
+        seed=123,
+        elimination="none",
+        output_path="corpora/triangle.jsonl",
     )
 
+    #act
+    result = generate_corpus(cfg)
+
+    #assert
     assert result.generated is True
     assert result.corpus_path == str(tmp_path / "corpora" / "triangle.jsonl")
     assert result.corpus_rows == _read_rows(result.corpus_path)
@@ -95,6 +100,7 @@ def test_geometric_corpus_api_uses_bundled_graphs_from_another_directory(
 def test_corpus_cli_and_api_generate_identical_examples(
     distribution, monkeypatch, tmp_path
 ):
+    #arrange
     monkeypatch.chdir(tmp_path)
     cfg = (
         _fixed_config(output_path="api.jsonl")
@@ -123,9 +129,11 @@ def test_corpus_cli_and_api_generate_identical_examples(
             ["--coeff-ring=QQ", "--symbols=x,y", f"--basis-elements={FIXED_BASIS}"]
         )
 
+    #act
     api_result = generate_corpus(cfg)
     cli_result = main(args)
 
+    #assert
     assert isinstance(cli_result, CorpusGenerationResult)
     assert api_result.generated is cli_result.generated is True
     assert cli_result.corpus_path == str(tmp_path / "cli.jsonl")
@@ -134,6 +142,7 @@ def test_corpus_cli_and_api_generate_identical_examples(
 
 
 def test_corpus_api_reuses_existing_cache(monkeypatch, tmp_path):
+    #arrange
     monkeypatch.chdir(tmp_path)
     cfg = _fixed_config()
 
@@ -141,8 +150,11 @@ def test_corpus_api_reuses_existing_cache(monkeypatch, tmp_path):
     corpus_path = Path(first.corpus_path)
     original_contents = corpus_path.read_bytes()
     original_mtime = corpus_path.stat().st_mtime_ns
+
+    #act
     second = generate_corpus(cfg)
 
+    #assert
     assert first.generated is True
     assert second.generated is False
     assert first.corpus_path == second.corpus_path
@@ -154,6 +166,7 @@ def test_corpus_api_reuses_existing_cache(monkeypatch, tmp_path):
 
 
 def test_corpus_api_requires_explicit_overwrite(monkeypatch, tmp_path):
+    #arrange
     monkeypatch.chdir(tmp_path)
     cfg = _fixed_config(output_path="corpus.jsonl")
     first = generate_corpus(cfg)
@@ -161,12 +174,19 @@ def test_corpus_api_requires_explicit_overwrite(monkeypatch, tmp_path):
     original_contents = corpus_path.read_bytes()
     replacement_cfg = replace(cfg, seed=124)
 
+    #act
+    #assert
     with pytest.raises(FileExistsError, match="Refusing to overwrite"):
         generate_corpus(replacement_cfg)
     assert corpus_path.read_bytes() == original_contents
 
-    replacement = generate_corpus(replace(replacement_cfg, overwrite=True))
+    #arrange
+    overwrite_cfg = replace(replacement_cfg, overwrite=True)
 
+    #act
+    replacement = generate_corpus(overwrite_cfg)
+
+    #assert
     assert replacement.generated is True
     assert replacement.corpus_path == first.corpus_path
     assert replacement.corpus_rows == _read_rows(corpus_path)
@@ -178,12 +198,14 @@ def test_corpus_api_requires_explicit_overwrite(monkeypatch, tmp_path):
 def test_corpus_api_rejects_nonpositive_example_counts(
     examples, monkeypatch, tmp_path
 ):
+    #arrange
     monkeypatch.chdir(tmp_path)
+    cfg = _fixed_config(examples=examples, output_path="invalid/corpus.jsonl")
 
+    #act
+    #assert
     with pytest.raises(ValueError, match="positive"):
-        generate_corpus(
-            _fixed_config(examples=examples, output_path="invalid/corpus.jsonl")
-        )
+        generate_corpus(cfg)
 
     assert not (tmp_path / "invalid").exists()
     assert not (tmp_path / "eval_corpora").exists()

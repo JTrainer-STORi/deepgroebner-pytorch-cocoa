@@ -180,6 +180,16 @@ class BuchbergerEnvExponentsv1(gym.Env):
           "steps_since_basis_update"
       ]
     
+    def _build_observation(self, obs_dict: dict) -> dict:
+        """Copy native buffers so later steps and resets cannot change this observation."""
+        return {
+            "G": np.array(obs_dict["G"], dtype=np.float32, copy=True),
+            "P": np.array(obs_dict["P"], dtype=np.float32, copy=True),
+            "G_mask": np.array(obs_dict["G_mask"], dtype=np.bool_, copy=True),
+            "P_mask": np.array(obs_dict["P_mask"], dtype=np.bool_, copy=True),
+            "state_features": np.array(obs_dict["state_feats"], dtype=np.float32, copy=True),
+        }
+
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
         self.env.seed(seed)
@@ -188,13 +198,7 @@ class BuchbergerEnvExponentsv1(gym.Env):
         self.total_reward = 0
         self.episode_length = 0
 
-        self.state = {
-            "G": np.asarray(obs_dict["G"], dtype=np.float32),
-            "P": np.asarray(obs_dict["P"], dtype=np.float32),
-            "G_mask": np.asarray(obs_dict["G_mask"], dtype=np.bool_),
-            "P_mask": np.asarray(obs_dict["P_mask"], dtype=np.bool_),
-            "state_features": np.asarray(obs_dict["state_feats"], dtype=np.float32),
-        }
+        self.state = self._build_observation(obs_dict)
 
         info = {name: cenv_info[name] for name in ("P_idx_raw", "P_sugar", "P_normal_rank")}
         return self.state, info
@@ -208,17 +212,7 @@ class BuchbergerEnvExponentsv1(gym.Env):
 
         truncated = False
 
-        self.state = {
-            "G": np.asarray(obs_dict["G"], dtype=np.float32),
-            "P": np.asarray(obs_dict["P"], dtype=np.float32),
-            "G_mask": np.asarray(obs_dict["G_mask"], dtype=np.bool_),
-            "P_mask": np.asarray(obs_dict["P_mask"], dtype=np.bool_),
-            "state_features": np.asarray(obs_dict["state_feats"], dtype=np.float32),
-        }
-
-        if terminated:
-            # Native buffers are reused on reset; preserve the terminal observation.
-            self.state = {name: value.copy() for name, value in self.state.items()}
+        self.state = self._build_observation(obs_dict)
         info = {name: cenv_info[name] for name in ("P_idx_raw", "P_sugar", "P_normal_rank")}
         return self.state, reward, bool(terminated), truncated, info
     

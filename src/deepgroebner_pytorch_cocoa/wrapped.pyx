@@ -64,6 +64,14 @@ cdef class CNoPQEnv:
     def value(self, strategy='degree', gamma=0.99):
         return self.c_env.value(strategy.encode(), gamma)
 
+    def is_groebner_basis(self):
+        """Check the actual current basis against CoCoALib for the reset ideal.
+
+        This read-only diagnostic does not complete the current basis. It may
+        return True before termination when redundant pairs remain to process.
+        """
+        return bool(self.c_env.is_groebner_basis())
+
     def copy(self):
         copy = CNoPQEnv()
         copy.c_env = NoPQEnv(self.c_env)
@@ -244,6 +252,14 @@ cdef class CGLeadMonomialsEnv:
 
     def value(self, strategy='degree', gamma=0.99):
         return self.c_env.value(strategy.encode(), gamma)
+
+    def is_groebner_basis(self):
+        """Check the actual current basis against CoCoALib for the reset ideal.
+
+        This read-only diagnostic does not complete the current basis. It may
+        return True before termination when redundant pairs remain to process.
+        """
+        return bool(self.c_env.is_groebner_basis())
 
     def copy(self):
         copy = CGLeadMonomialsEnv()

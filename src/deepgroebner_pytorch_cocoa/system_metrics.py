@@ -1,6 +1,7 @@
 """Functions for monitoring and logging system metrics during training"""
 
 import json
+import math
 import os
 import time
 from collections.abc import Callable, Sequence
@@ -56,11 +57,18 @@ def _read_proc_status_bytes() -> dict[str, int | None]:
 
 
 def collect_system_metrics_snapshot(device: torch.device | None = None) -> dict[str, Any]:
-    """Collects best-effort process and device memory metrics."""
+    """Collect main-process CPU times and best-effort process/device memory."""
     record = _read_proc_status_bytes()
     for byte_key in list(record.keys()):
         gib_key = byte_key.removesuffix("_bytes") + "_gib"
         record[gib_key] = _bytes_to_gib(record[byte_key])
+
+    cpu_times = os.times()
+    record.update(
+        process_cpu_user_seconds=cpu_times.user,
+        process_cpu_system_seconds=cpu_times.system,
+        process_cpu_total_seconds=cpu_times.user + cpu_times.system,
+    )
 
     cuda_enabled = (
         device is not None
@@ -176,6 +184,7 @@ class SystemMetricsRecorder:
         self.snapshot_fn = snapshot_fn
         self.clock_fn = clock_fn
         self.last_sample_time: float | None = None
+        self._last_cpu_total_seconds: float | None = None
         self._handle = None
 
         if self.enabled:
@@ -210,6 +219,18 @@ class SystemMetricsRecorder:
         record.update(self.snapshot_fn(self.device))
         if extra_metrics:
             record.update(extra_metrics)
+
+        cpu_total = record.get("process_cpu_total_seconds")
+        if isinstance(cpu_total, (int, float)) and math.isfinite(cpu_total):
+            if self.last_sample_time is not None and self._last_cpu_total_seconds is not None:
+                wall_delta = now - self.last_sample_time
+                cpu_delta = cpu_total - self._last_cpu_total_seconds
+                if wall_delta > 0 and cpu_delta >= 0:
+                    # 100% means one CPU core; multiple busy threads can exceed it.
+                    record["process_cpu_percent"] = 100.0 * cpu_delta / wall_delta
+            self._last_cpu_total_seconds = cpu_total
+        else:
+            self._last_cpu_total_seconds = None
 
         self._handle.write(json.dumps(record) + "\n")
         self._handle.flush()

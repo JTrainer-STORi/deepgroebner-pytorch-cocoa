@@ -162,9 +162,14 @@ class RewardNormalizer:
         self.rms = RunningMeanStd(shape=(), epsilon=1e-4, device=device)
 
     def normalize(self, rewards: torch.Tensor, dones: torch.Tensor):
-        dones = dones.to(dtype=torch.float32)
-        self.returns = self.returns * self.gamma * (1.0 - dones) + rewards
+        """Scale this transition's rewards, then reset returns for finished episodes.
+
+        ``dones`` describes the transition producing ``rewards``, so its terminal
+        reward contributes to the complete episode before the accumulator resets.
+        """
+        self.returns = self.returns * self.gamma + rewards
         self.rms.update(self.returns)
+        self.returns = self.returns * (1.0 - dones.to(dtype=torch.float32))
         std = torch.sqrt(self.rms.var + self.epsilon)
         normalized = rewards / std
         if self.clip_range is not None and self.clip_range > 0:

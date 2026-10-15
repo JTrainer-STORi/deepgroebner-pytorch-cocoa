@@ -27,6 +27,7 @@ def _training_config(tmp_path, *, steps_per_update=4, updates=6):
 
 
 def test_disabled_evaluation_is_never_invoked(tmp_path, monkeypatch):
+    #arrange
     cfg = _training_config(tmp_path)
     cfg.training.hparam_eval_interval_steps = 1
     cfg.training.hparam_eval_num_examples = 0
@@ -38,8 +39,11 @@ def test_disabled_evaluation_is_never_invoked(tmp_path, monkeypatch):
         ppo_evaluation.TrainingEvaluation, "evaluate", unexpected_evaluation
     )
     trainer = ppo_training.PPOTrainer(cfg)
+
+    #act
     result = trainer.run()
 
+    #assert
     assert result.summary["global_step"] == 24
     assert trainer.evaluation.next_step is None
 
@@ -55,6 +59,7 @@ def test_disabled_evaluation_is_never_invoked(tmp_path, monkeypatch):
 def test_evaluation_runs_only_when_due_and_advances_schedule(
     tmp_path, monkeypatch, interval, steps_per_update, updates, expected_schedule
 ):
+    #arrange
     cfg = _training_config(
         tmp_path, steps_per_update=steps_per_update, updates=updates
     )
@@ -99,8 +104,11 @@ def test_evaluation_runs_only_when_due_and_advances_schedule(
         ppo_evaluation.TrainingEvaluation, "evaluate", record_evaluation
     )
     trainer = ppo_training.PPOTrainer(cfg)
+
+    #act
     result = trainer.run()
 
+    #assert
     assert observed_schedule == expected_schedule
     assert trainer.evaluation.next_step == expected_schedule[-1][2]
     assert result.summary["policy_updates"] == updates

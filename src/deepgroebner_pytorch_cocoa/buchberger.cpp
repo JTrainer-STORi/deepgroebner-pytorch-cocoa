@@ -811,7 +811,7 @@ void update(std::vector<RingElem>& G,
                                 bool sort_input,
                                 bool sort_reducers,
                                 bool fix_ideal,
-                                std::string laman_graph_directory) : elimination(elimination), rewards(RewardType::Additions), sort_input(sort_input),
+                                std::string laman_graph_directory) : elimination(elimination), rewards(rewards), sort_input(sort_input),
     sort_reducers(sort_reducers), fix_ideal(fix_ideal) {
     ideal_gen = parse_ideal_dist(ideal_dist, laman_graph_directory);
     }
@@ -824,14 +824,14 @@ void update(std::vector<RingElem>& G,
                                 RewardType rewards,
                                 bool sort_input,
                                 bool sort_reducers)
-      : elimination(elimination), rewards(RewardType::Additions), sort_input(sort_input),
+      : elimination(elimination), rewards(rewards), sort_input(sort_input),
         sort_reducers(sort_reducers), fix_ideal(true) {
       cached_ideal = parse_fixed_ideal(coeff_ring, symbols_str, basis_strs, fixed_nvars);
     }
 
 
   BuchbergerEnv::BuchbergerEnv(const BuchbergerEnv &other)
-          : G(other.G), LM(other.LM), degLM(other.degLM), P(other.P), Sugars(other.Sugars), state_feats(other.state_feats), elimination(other.elimination), rewards(other.rewards), sort_input(other.sort_input), sort_reducers(other.sort_reducers), fix_ideal(other.fix_ideal), fixed_nvars(other.fixed_nvars), cached_ideal(other.cached_ideal), G_(other.G_), LM_G_(other.LM_G_), SugarsG_(other.SugarsG_), feat_tracker(other.feat_tracker) {
+          : G(other.G), LM(other.LM), degLM(other.degLM), P(other.P), Sugars(other.Sugars), state_feats(other.state_feats), elimination(other.elimination), rewards(other.rewards), sort_input(other.sort_input), sort_reducers(other.sort_reducers), fix_ideal(other.fix_ideal), fixed_nvars(other.fixed_nvars), cached_ideal(other.cached_ideal), G_(other.G_), input_generators(other.input_generators), LM_G_(other.LM_G_), SugarsG_(other.SugarsG_), feat_tracker(other.feat_tracker) {
       if (other.ideal_gen) {
         ideal_gen = other.ideal_gen->copy();
       }
@@ -857,6 +857,7 @@ void update(std::vector<RingElem>& G,
       fixed_nvars = other.fixed_nvars;
       cached_ideal = other.cached_ideal;
       G_ = other.G_;
+      input_generators = other.input_generators;
       LM_G_ = other.LM_G_;
       Sugars = other.Sugars;
       SugarsG_ = other.SugarsG_;
@@ -880,6 +881,8 @@ void update(std::vector<RingElem>& G,
         ideal I = *cached_ideal;
         F = gens(I);
     }
+
+    input_generators = F;
 
     // Sort input generators by cached LPP (optional)
     if (sort_input) {
@@ -933,7 +936,7 @@ void update(std::vector<RingElem>& G,
         }
     }
 
-    if (P.empty()) {
+    if (P.empty() && !fix_ideal) {
         std::cout << "p-empty";
         for (ConstRefRingElem f : F) {
           std::cout << f << "\n";
@@ -991,6 +994,34 @@ void update(std::vector<RingElem>& G,
     feat_tracker.on_step_completed(state_feats);
 
     return (rewards == RewardType::Additions) ? (-1.0 - stats) : -1.0;
+  }
+
+
+  bool BuchbergerEnv::is_groebner_basis() const {
+    if (input_generators.empty()) {
+      throw std::logic_error("Call reset before checking the current Groebner basis");
+    }
+
+    // Compute only the reference basis with CoCoALib. Computing GBasis(ideal(G))
+    // would complete an unfinished candidate, hiding missing pairs/remainders.
+    const ideal input_ideal(input_generators);
+    const auto& reference = GBasis(input_ideal);
+
+    // G must generate elements of the original ideal, even if an implementation
+    // error were to introduce an extraneous polynomial.
+    for (ConstRefRingElem g : G) {
+      if (!IsZero(NR(g, reference))) return false;
+    }
+
+    // Given that containment, equality of leading ideals proves both that G is
+    // a Groebner basis and that it generates the original ideal. NR and GBasis
+    // are CoCoALib routines, independent of this package's reduction functions.
+    for (ConstRefRingElem g : reference) {
+      if (std::none_of(G.begin(), G.end(), [&g](ConstRefRingElem candidate) {
+          return !IsZero(candidate) && IsDivisible(LPP(g), LPP(candidate));
+        })) return false;
+    }
+    return true;
   }
 
 

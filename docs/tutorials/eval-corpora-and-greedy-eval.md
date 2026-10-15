@@ -232,7 +232,7 @@ python run_training.py \
   --training.num_envs=12 \
   --training.track=True \
   --training.wandb_project=deepgroebner-public \
-  --training.wandb_group=geom_eval \
+  --training.group=geom_eval \
   --training.hparam_eval_interval_steps=100000 \
   --training.hparam_eval_num_examples=50 \
   --actor.state_embedding_head=deep-set \

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from .greedy_eval import (
     resolve_greedy_eval_targets,
     build_greedy_eval_seeds,
@@ -10,6 +12,43 @@ from .greedy_eval import (
     compute_greedy_eval_selection_metric,
 )
 from .training_utils import console_print, save_model_checkpoints
+
+
+def _log_target_metrics(writer, stats: dict, target: str, global_step: int) -> None:
+    """Log each evaluation target once, independently of checkpoint selection."""
+    prefix = "train_env" if target == "train" else "nopq"
+    for leaf, field in (
+        ("mean_return", "mean_return"),
+        ("median_return", "median_return"),
+        ("min_return", "min_return"),
+        ("max_return", "max_return"),
+        ("mean_length", "mean_length"),
+        ("max_length", "max_length"),
+        ("num_completed", "num_completed"),
+        ("completion_rate", "completion_rate"),
+        ("num_truncated", "num_truncated_total"),
+        ("num_timed_out", "num_timed_out"),
+        ("num_worker_exited", "num_worker_exited"),
+    ):
+        writer.add_scalar(
+            f"evaluation_greedy/{prefix}_{leaf}", stats[field], global_step
+        )
+    if target == "nopq":
+        writer.add_scalar(
+            "evaluation_greedy/nopq_num_benchmark_truncated",
+            stats["num_benchmark_truncated"],
+            global_step,
+        )
+    completed_mean = stats["mean_return_completed_only"]
+    if completed_mean is not None and math.isfinite(completed_mean):
+        writer.add_scalar(
+            f"evaluation_greedy/{prefix}_mean_return_completed_only",
+            completed_mean,
+            global_step,
+        )
+    writer.add_scalar(
+        f"performance/greedy_{prefix}_seconds", stats["elapsed_seconds"], global_step
+    )
 
 
 class TrainingEvaluation:
@@ -35,7 +74,6 @@ class TrainingEvaluation:
                     "key": "train",
                     "label": "",
                     "gym_id": cfg.env.gym_id,
-                    "is_primary": self.primary_target == "train",
                 }
             )
         if self.run_nopq_env:
@@ -44,7 +82,6 @@ class TrainingEvaluation:
                     "key": "nopq",
                     "label": " NoPQ",
                     "gym_id": self.nopq_gym_id,
-                    "is_primary": self.primary_target == "nopq",
                 }
             )
         self.seeds = build_greedy_eval_seeds(cfg, self.enabled)
@@ -132,136 +169,9 @@ class TrainingEvaluation:
                     ]
                     self.best_nopq_step = global_step
 
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_mean_return",
-                    greedy_eval_stats["mean_return"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_median_return",
-                    greedy_eval_stats["median_return"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_min_return",
-                    greedy_eval_stats["min_return"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_max_return",
-                    greedy_eval_stats["max_return"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_mean_length",
-                    greedy_eval_stats["mean_length"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_max_length",
-                    greedy_eval_stats["max_length"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_num_completed",
-                    greedy_eval_stats["num_completed"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_completion_rate",
-                    greedy_eval_stats["completion_rate"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_num_truncated",
-                    greedy_eval_stats["num_truncated_total"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_num_benchmark_truncated",
-                    greedy_eval_stats["num_benchmark_truncated"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_num_timed_out",
-                    greedy_eval_stats["num_timed_out"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_num_worker_exited",
-                    greedy_eval_stats["num_worker_exited"],
-                    global_step,
-                )
-                if greedy_eval_stats["mean_return_completed_only"] is not None:
-                    writer.add_scalar(
-                        "charts/greedy_eval_nopq_mean_return_completed_only",
-                        greedy_eval_stats["mean_return_completed_only"],
-                        global_step,
-                    )
-
-            if greedy_eval_target["is_primary"]:
-                self.last = greedy_eval_stats
-                writer.add_scalar(
-                    "charts/greedy_eval_mean_return",
-                    greedy_eval_stats["mean_return"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_median_return",
-                    greedy_eval_stats["median_return"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_min_return",
-                    greedy_eval_stats["min_return"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_max_return",
-                    greedy_eval_stats["max_return"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_mean_length",
-                    greedy_eval_stats["mean_length"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_max_length",
-                    greedy_eval_stats["max_length"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_num_completed",
-                    greedy_eval_stats["num_completed"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_completion_rate",
-                    greedy_eval_stats["completion_rate"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_num_truncated",
-                    greedy_eval_stats["num_truncated_total"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_num_timed_out",
-                    greedy_eval_stats["num_timed_out"],
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_num_worker_exited",
-                    greedy_eval_stats["num_worker_exited"],
-                    global_step,
-                )
-                if greedy_eval_stats["mean_return_completed_only"] is not None:
-                    writer.add_scalar(
-                        "charts/greedy_eval_mean_return_completed_only",
-                        greedy_eval_stats["mean_return_completed_only"],
-                        global_step,
-                    )
+            _log_target_metrics(
+                writer, greedy_eval_stats, greedy_eval_target["key"], global_step
+            )
 
             console_print(
                 cfg,
@@ -292,20 +202,15 @@ class TrainingEvaluation:
         self.last_metric = selection_metric
         if selection_metric is not None:
             writer.add_scalar(
-                "charts/greedy_eval_selection_metric", selection_metric, global_step
+                "evaluation_greedy/selection_metric", selection_metric, global_step
             )
         if self.run_train_env and self.run_nopq_env:
             train_stats = greedy_eval_round_stats.get("train")
             nopq_stats = greedy_eval_round_stats.get("nopq")
             if train_stats is not None and nopq_stats is not None:
                 writer.add_scalar(
-                    "charts/greedy_eval_nopq_minus_train_mean_return",
+                    "evaluation_greedy/nopq_minus_train_mean_return",
                     float(nopq_stats["mean_return"] - train_stats["mean_return"]),
-                    global_step,
-                )
-                writer.add_scalar(
-                    "charts/greedy_eval_nopq_num_benchmark_truncated",
-                    int(nopq_stats["num_benchmark_truncated"]),
                     global_step,
                 )
 

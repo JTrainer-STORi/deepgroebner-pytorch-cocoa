@@ -134,7 +134,9 @@ def optimize_update(
             if cfg.training.normalize_advantage:
                 mb_advantages_mean = mb_advantages.mean()
                 advantages_means.append(float(mb_advantages_mean.detach().item()))
-                mb_advantages_std = mb_advantages.std()
+                mb_advantages_std = mb_advantages.std(
+                    unbiased=mb_advantages.numel() > 1
+                )
                 advantages_stds.append(float(mb_advantages_std.detach().item()))
                 mb_advantages = (mb_advantages - mb_advantages_mean) / (
                     mb_advantages_std + 1e-8

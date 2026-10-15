@@ -288,30 +288,30 @@ class PPOTrainer:
                         self.min_episodic_return, episodic_return
                     )
                     self.writer.add_scalar(
-                        "charts/episodic_return", episodic_return, self.global_step
+                        "evaluation_training/episodic_return", episodic_return, self.global_step
                     )
                     self.writer.add_scalar(
-                        "charts/max_episodic_return",
+                        "evaluation_training/max_episodic_return",
                         self.max_episodic_return,
                         self.global_step,
                     )
                     self.writer.add_scalar(
-                        "charts/min_episodic_return",
+                        "evaluation_training/min_episodic_return",
                         self.min_episodic_return,
                         self.global_step,
                     )
                     self.writer.add_scalar(
-                        "charts/episodic_return_last_100_avg",
+                        "evaluation_training/episodic_return_last_100_avg",
                         self.last_k_avg_return,
                         self.global_step,
                     )
                     self.writer.add_scalar(
-                        "charts/episodic_length",
+                        "evaluation_training/episodic_length",
                         infos["episode"]["l"][i].item(),
                         self.global_step,
                     )
                     self.writer.add_scalar(
-                        "charts/episodes_completed",
+                        "evaluation_training/episodes_completed",
                         self.episode_counter,
                         self.global_step,
                     )
@@ -373,39 +373,36 @@ class PPOTrainer:
         cfg = self.cfg
         self.policy_updates += 1
         scalars = {
-            "charts/learning_rate": self.optimizer.param_groups[0]["lr"],
-            "charts/policy_updates": self.policy_updates,
+            "algorithm_general/learning_rate": self.optimizer.param_groups[0]["lr"],
+            "algorithm_general/policy_updates": self.policy_updates,
         }
         if cfg.critic.critic_strategy != "heuristic-only":
             scalars.update(
                 {
-                    "losses/critic_loss": metrics.value_loss,
-                    "losses/c1*critic_loss": cfg.training.critic_loss_coefficient
+                    "algorithm_value/loss": metrics.value_loss,
+                    "algorithm_value/weighted_loss": cfg.training.critic_loss_coefficient
                     * metrics.value_loss,
-                    "losses/critic_clipfrac": np.mean(metrics.value_clipfracs),
-                    "losses/pre_clip_critic_grad_norm": metrics.critic_grad_norm,
+                    "algorithm_value/clip_fraction": np.mean(metrics.value_clipfracs),
+                    "algorithm_value/grad_norm_before_clip": metrics.critic_grad_norm,
                 }
             )
         scalars.update(
             {
-                "losses/explained_variance": metrics.explained_variance,
-                "losses/policy_loss": metrics.policy_loss,
-                "losses/entropy": metrics.entropy_bonus,
-                "losses/c2*entropy": cfg.training.entropy_coefficient
+                "algorithm_value/explained_variance": metrics.explained_variance,
+                "algorithm_policy/loss": metrics.policy_loss,
+                "algorithm_policy/entropy_raw": metrics.entropy_raw,
+                "algorithm_policy/entropy_normalized": metrics.entropy_normalized,
+                "algorithm_policy/entropy_bonus": metrics.entropy_bonus,
+                "algorithm_policy/weighted_entropy_bonus": cfg.training.entropy_coefficient
                 * metrics.entropy_bonus,
-                "losses/entropy_raw": metrics.entropy_raw,
-                "losses/entropy_normalized": metrics.entropy_normalized,
-                "losses/entropy_bonus_used": metrics.entropy_bonus,
-                "losses/c2*entropy_bonus_used": cfg.training.entropy_coefficient
-                * metrics.entropy_bonus,
-                "losses/old_approx_kl": metrics.old_approx_kl,
-                "losses/approx_kl": metrics.approx_kl,
-                "losses/advantage_mean": (
+                "algorithm_policy/old_approx_kl": metrics.old_approx_kl,
+                "algorithm_policy/approx_kl": metrics.approx_kl,
+                "algorithm_general/advantage_mean": (
                     sum(metrics.advantage_means) / len(metrics.advantage_means)
                     if metrics.advantage_means
                     else float("nan")
                 ),
-                "losses/advantage_std": (
+                "algorithm_general/advantage_std": (
                     (
                         sum(s**2 for s in metrics.advantage_stds)
                         / len(metrics.advantage_stds)
@@ -414,8 +411,8 @@ class PPOTrainer:
                     if metrics.advantage_stds
                     else float("nan")
                 ),
-                "losses/pre_clip_actor_grad_norm": metrics.actor_grad_norm,
-                "losses/policy_clipfrac": np.mean(metrics.clipfracs),
+                "algorithm_policy/grad_norm_before_clip": metrics.actor_grad_norm,
+                "algorithm_policy/clip_fraction": np.mean(metrics.clipfracs),
             }
         )
         if self.obs_sf_normalizer is not None:
@@ -425,16 +422,16 @@ class PPOTrainer:
             )
             scalars.update(
                 {
-                    "normalization/state_features/running_mean": tensor_stat_to_float(
+                    "algorithm_general/state_features_running_mean": tensor_stat_to_float(
                         self.obs_sf_normalizer.mean
                     ),
-                    "normalization/state_features/running_std": tensor_stat_to_float(
+                    "algorithm_general/state_features_running_std": tensor_stat_to_float(
                         std
                     ),
-                    "normalization/state_features/running_std_max": std.detach()
+                    "algorithm_general/state_features_running_std_max": std.detach()
                     .max()
                     .item(),
-                    "normalization/state_features/running_std_min": std.detach()
+                    "algorithm_general/state_features_running_std_min": std.detach()
                     .min()
                     .item(),
                 }
@@ -446,10 +443,10 @@ class PPOTrainer:
             )
             scalars.update(
                 {
-                    "normalization/reward/running_return_mean": tensor_stat_to_float(
+                    "algorithm_general/reward_running_return_mean": tensor_stat_to_float(
                         self.reward_normalizer.rms.mean
                     ),
-                    "normalization/reward/running_return_std": tensor_stat_to_float(
+                    "algorithm_general/reward_running_return_std": tensor_stat_to_float(
                         std
                     ),
                 }
@@ -460,16 +457,16 @@ class PPOTrainer:
             )
             scalars.update(
                 {
-                    "normalization/value/running_target_mean": tensor_stat_to_float(
+                    "algorithm_value/running_target_mean": tensor_stat_to_float(
                         self.value_normalizer.mean
                     ),
-                    "normalization/value/running_target_std": tensor_stat_to_float(
+                    "algorithm_value/running_target_std": tensor_stat_to_float(
                         std
                     ),
                 }
             )
         sps = int(self.global_step / (time.time() - self.start_time))
-        scalars["charts/SPS"] = sps
+        scalars["performance/steps_per_second"] = sps
         for tag, value in scalars.items():
             self.writer.add_scalar(tag, value, self.global_step)
         self._record_system_metrics(

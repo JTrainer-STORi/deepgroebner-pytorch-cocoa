@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import asdict
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,37 +14,41 @@ from deepgroebner_pytorch_cocoa import training_utils
 
 
 def test_simple_run_writer_writes_jsonl_csv_and_text(tmp_path):
+    #arrange
     writer = SimpleRunWriter(str(tmp_path / "run"))
-    writer.add_scalar("charts/SPS", 123, 10)
-    writer.add_text("hyperparameters", "learning_rate: 0.001")
-    writer.close()
-
     scalar_jsonl_path = tmp_path / "run" / "scalars.jsonl"
     scalar_csv_path = tmp_path / "run" / "scalars.csv"
     hyperparameters_path = tmp_path / "run" / "text" / "hyperparameters.md"
 
+    #act
+    writer.add_scalar("performance/steps_per_second", 123, 10)
+    writer.add_text("hyperparameters", "learning_rate: 0.001")
+    writer.close()
     records = [json.loads(line) for line in scalar_jsonl_path.read_text(encoding="utf-8").splitlines()]
+    with scalar_csv_path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    hyperparameters = hyperparameters_path.read_text(encoding="utf-8")
+
+    #assert
     assert records == [
         {
             "type": "scalar",
-            "tag": "charts/SPS",
+            "tag": "performance/steps_per_second",
             "value": 123.0,
             "step": 10,
         }
     ]
 
-    with scalar_csv_path.open("r", encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle))
     assert rows == [
         {
             "type": "scalar",
-            "tag": "charts/SPS",
+            "tag": "performance/steps_per_second",
             "value": "123.0",
             "step": "10",
         }
     ]
 
-    assert hyperparameters_path.read_text(encoding="utf-8") == "learning_rate: 0.001"
+    assert hyperparameters == "learning_rate: 0.001"
 
 
 @pytest.mark.parametrize(
@@ -54,27 +59,38 @@ def test_simple_run_writer_writes_jsonl_csv_and_text(tmp_path):
 def test_create_local_run_writer_without_wandb_id_helper(
     wandb_module, monkeypatch, tmp_path
 ):
+    #arrange
     monkeypatch.setattr(training_utils, "wandb", wandb_module)
     cfg = Config()
     cfg.training.track = False
     cfg.training.output_directory = str(tmp_path)
 
+    #act
     run_name, writer = training_utils.create_run_writer(cfg)
     try:
-        assert Path(writer.log_dir) == tmp_path / "runs" / run_name
-        assert run_name.rsplit("__", 1)[1]
-        writer.add_scalar("charts/SPS", 42, 1)
+        writer.add_scalar("performance/steps_per_second", 42, 1)
     finally:
         writer.close()
 
     run_directory = tmp_path / "runs" / run_name
+    scalar_record = json.loads((run_directory / "scalars.jsonl").read_text())
+
+    #assert
+    assert Path(writer.log_dir) == tmp_path / "runs" / run_name
+    assert run_name.rsplit("__", 1)[1]
     assert (run_directory / "scalars.jsonl").is_file()
     assert (run_directory / "scalars.csv").is_file()
     assert (run_directory / "text" / "hyperparameters.md").is_file()
-    assert json.loads((run_directory / "scalars.jsonl").read_text())["value"] == 42
+    assert scalar_record["value"] == 42
 
 
-def test_tracked_run_uses_same_id_for_wandb_and_local_logs(monkeypatch, tmp_path):
+@pytest.mark.parametrize("configured_output", [False, True])
+@pytest.mark.parametrize("group", [None, "sweep-001"])
+def test_tracked_run_uses_same_id_and_output_root_for_wandb_and_local_logs(
+    configured_output, group, monkeypatch, tmp_path
+):
+    #arrange
+    monkeypatch.chdir(tmp_path)
     init_calls = []
     log_calls = []
     wandb_module = SimpleNamespace(
@@ -94,21 +110,49 @@ def test_tracked_run_uses_same_id_for_wandb_and_local_logs(monkeypatch, tmp_path
     monkeypatch.setattr(training_utils, "wandb", wandb_module)
     cfg = Config()
     cfg.training.track = True
-    cfg.training.output_directory = str(tmp_path)
+    cfg.training.output_directory = (
+        str(tmp_path / "configured-output") if configured_output else None
+    )
+    cfg.training.group = group
+    original_config = asdict(cfg)
+    output_root = tmp_path / "configured-output" if configured_output else tmp_path
+    if group is not None:
+        output_root /= group
+    expected_metrics = {
+        "performance/steps_per_second": 42.0,
+        "algorithm_policy/loss": 1.25,
+        "evaluation_greedy/selection_metric": -3.0,
+    }
 
+    #act
     run_name, writer = training_utils.create_run_writer(cfg)
     try:
-        (init_kwargs,) = init_calls
-        run_id = run_name.rsplit("__", 1)[1]
-        assert run_id
-        assert init_kwargs["id"] == run_id
-        assert init_kwargs["name"] == run_name
-        assert init_kwargs["settings"].init_timeout == cfg.training.wandb_init_timeout
-        assert Path(writer.log_dir) == tmp_path / "runs" / run_name
-        writer.add_scalar("charts/SPS", 42, 1)
+        for tag, value in expected_metrics.items():
+            writer.add_scalar(tag, value, 1)
     finally:
         writer.close()
 
-    assert log_calls == [({"charts/SPS": 42.0}, 1)]
+    (init_kwargs,) = init_calls
+    run_id = run_name.rsplit("__", 1)[1]
+    records = [json.loads(line) for line in Path(writer.scalar_path).read_text().splitlines()]
+
+    #assert
+    assert run_id
+    assert init_kwargs["id"] == run_id
+    assert init_kwargs["name"] == run_name
+    assert init_kwargs["settings"].init_timeout == cfg.training.wandb_init_timeout
+    assert Path(writer.log_dir).resolve() == output_root / "runs" / run_name
+    if configured_output or group is not None:
+        assert Path(init_kwargs["dir"]).resolve() == output_root
+        assert output_root.is_dir()
+    else:
+        assert "dir" not in init_kwargs
+    if group is not None:
+        assert init_kwargs["group"] == group
+    else:
+        assert "group" not in init_kwargs
+    assert log_calls == [({tag: value}, 1) for tag, value in expected_metrics.items()]
     assert Path(wandb_module.summary["hyperparameters_path"]).is_file()
-    assert json.loads(Path(writer.scalar_path).read_text())["value"] == 42
+    assert {record["tag"]: record["value"] for record in records} == expected_metrics
+    assert Path(writer.scalar_csv_path).is_file()
+    assert asdict(cfg) == original_config

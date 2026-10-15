@@ -295,6 +295,10 @@ std::pair<std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector<R
     // function forwhen a heuristic based value function is used
     double value(std::string strategy = "degree", double gamma = 1.0) const;
 
+    // Independently check the current basis against CoCoALib's GBasis of the
+    // original reset generators, without completing Buchberger's algorithm on G.
+    bool is_groebner_basis() const;
+
     // classes member vairables are those that are relevant to Buchberger's algorithm like the vector of basis elements for the basis set, the vector of SPairs for the pair set, we keep track of sugars, leading monomials and degree of leading monomials to cut down on the amount of recalculation when using heuristics for value functions or priority queue
     std::vector<RingElem> G;
     std::vector<PPMonoidElem> LM;
@@ -320,6 +324,7 @@ std::pair<std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector<R
 
     std::optional<ideal> cached_ideal;
     std::vector<RingElem> G_;  // the reducers
+    std::vector<RingElem> input_generators;
     std::vector<PPMonoidElem> LM_G_;
     std::vector<int> SugarsG_;
 
@@ -379,6 +384,8 @@ std::pair<std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector<R
     };
 
     double value(std::string strategy = "degree", double gamma = 1.0) const { return env.value(strategy, gamma); };
+
+    bool is_groebner_basis() const { return env.is_groebner_basis(); }
 
     std::vector<int> leads;
     int cols;
@@ -458,6 +465,8 @@ std::pair<std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector<R
       };
 
       double value(std::string strategy = "degree", double gamma = 1.0) const { return env.value(strategy, gamma); };
+
+      bool is_groebner_basis() const { return env.is_groebner_basis(); }
 
       std::vector<int> state;
       std::vector<int> G_leads;

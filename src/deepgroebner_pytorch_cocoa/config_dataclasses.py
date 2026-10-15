@@ -125,7 +125,7 @@ class CriticConfig(ModelConfig):
   
   # value head related config
   value_function_heuristic: Literal["random", "first", "degree", "normal", "sugar"] = "degree" # The heuristic to use for the critic's value estimates. When the critic strategy is `heuristic-only` or `heuristic-plus-learned-residual`
-  critic_strategy: Literal["heuristic-only", "heuristic-plus-learned-residual", "learned-only"] = "heuristic-plus-learned-residual" # The strategy to use for the critic's value estimates. "heuristic-only" uses only a heuristic value based on the number of pairs and basis elements, "learned-only" uses only the learned value function, and "heuristic-plus-learned" combines both by adding the heuristic value to the learned value function's output.
+  critic_strategy: Literal["heuristic-only", "heuristic-plus-learned-residual", "learned-only"] = "learned-only" # The strategy to use for the critic's value estimates. "heuristic-only" uses only a heuristic value based on the number of pairs and basis elements, "learned-only" uses only the learned value function, and "heuristic-plus-learned" combines both by adding the heuristic value to the learned value function's output.
   value_head_n_layers: int = 2 # Number of hidden layers for MLP in value head
   value_head_hidden_dims: int = 128 # Shared hidden dimension for MLP in value head
   value_head_activation: Literal['relu', 'gelu', 'selu', 'tanh'] = 'gelu' # Activation function for MLP in value head
@@ -189,13 +189,13 @@ class TrainingConfig:
   cuda: tyro.conf.FlagConversionOff[bool] = True # Whether to use CUDA (GPU) for training if available.
   track: tyro.conf.FlagConversionOff[bool] = False # Whether to track the experiment with Weights and Biases (wandb). If True, make sure to set up wandb with your project and API key.
   console_verbosity: Literal["quiet", "normal", "verbose"] = "normal" # Controls trainer terminal output. Use "quiet" for minimal logs, "normal" for update summaries, or "verbose" for config/model dumps and eval progress details.
-  wandb_project: str = "ppo-implementation-details" # The name of the Weights and Biases project to use for tracking this experiment.
+  wandb_project: str = "deepgroebner-pytorch-cocoa" # The name of the Weights and Biases project to use for tracking this experiment.
   wandb_entity: Optional[str] = None # The name of the Weights and Biases entity (team) to use for tracking this experiment. If None, it will default to your personal account.
-  wandb_group: Optional[str] = None # Optional W&B group name used to group related runs together in the dashboard.
+  group: Optional[str] = None # Optional group name: places logs, checkpoints, and W&B run files under output_directory/group, even without W&B tracking.
   wandb_init_timeout: int = 180 # Seconds to wait for wandb.init() before treating startup as timed out.
   wandb_offline_on_timeout: tyro.conf.FlagConversionOff[bool] = True # Whether to retry wandb initialization in offline mode after an init timeout.
-  output_directory: Optional[str] = None # The path to a directory to save wandb artifacts if needed
-  system_metrics_enabled: tyro.conf.FlagConversionOff[bool] = True # Whether to periodically write process/device memory samples to system_metrics.jsonl in the run directory.
+  output_directory: Optional[str] = None # Base directory for logs, checkpoints, and W&B run files. Defaults to the working directory; group adds a shared subdirectory.
+  system_metrics_enabled: tyro.conf.FlagConversionOff[bool] = True # Whether to periodically record process CPU, process/device memory, and environment-growth samples in system_metrics.jsonl and scalar logs.
   system_metrics_interval_seconds: float = 10.0 # Wall-clock sampling interval for system_metrics.jsonl. Set <= 0 to record once per PPO update.
   save_actor: tyro.conf.FlagConversionOff[bool] = True # Whether to save the actor model after training
   save_critic: tyro.conf.FlagConversionOff[bool] = False # Whether to save the critic model after training

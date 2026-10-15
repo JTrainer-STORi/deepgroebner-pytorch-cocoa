@@ -1,4 +1,6 @@
 from dataclasses import asdict
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import gymnasium as gym
@@ -49,26 +51,41 @@ def test_returns_stop_at_episode_boundaries_and_bootstrap_unfinished_episodes(
     expected_advantages,
     expected_returns,
 ):
+    #arrange
+    rewards = torch.tensor([[1.0], [2.0], [3.0]])
+    values = torch.tensor([[0.5], [0.6], [0.7]])
+    dones = torch.tensor([[0.0], [1.0], [0.0]])
+    next_value = torch.tensor([[1.0]])
+    next_done = torch.tensor([0.0])
+
+    #act
     advantages, returns = compute_returns_and_advantages(
-        rewards=torch.tensor([[1.0], [2.0], [3.0]]),
-        values=torch.tensor([[0.5], [0.6], [0.7]]),
-        dones=torch.tensor([[0.0], [1.0], [0.0]]),
-        next_value=torch.tensor([[1.0]]),
-        next_done=torch.tensor([0.0]),
+        rewards=rewards,
+        values=values,
+        dones=dones,
+        next_value=next_value,
+        next_done=next_done,
         gamma=0.9,
         gae_lambda=0.8,
         use_gae=use_gae,
     )
+
+    #assert
     torch.testing.assert_close(advantages[:, 0], torch.tensor(expected_advantages))
     torch.testing.assert_close(returns[:, 0], torch.tensor(expected_returns))
 
 
 def test_popart_preserves_raw_predictions_when_target_statistics_change():
+    #arrange
     layer = torch.nn.Linear(3, 1)
     normalizer = PopArt(layer)
     features = torch.randn(4, 3)
     before = normalizer.denormalize(layer(features)).detach()
+
+    #act
     normalizer.update(torch.tensor([10.0, 20.0, 30.0, 40.0]))
+
+    #assert
     torch.testing.assert_close(
         normalizer.denormalize(layer(features)), before, atol=1e-5, rtol=1e-5
     )
@@ -80,7 +97,9 @@ def test_popart_preserves_raw_predictions_when_target_statistics_change():
 def test_rollout_snapshots_and_minibatch_order_survive_environment_steps(
     gym_id, tmp_path
 ):
+    #arrange
     cfg = _small_config(tmp_path)
+    cfg.critic.critic_strategy = "heuristic-plus-learned-residual"
     cfg.training.num_steps_per_update = 2
     env = gym.make(
         gym_id,
@@ -97,6 +116,8 @@ def test_rollout_snapshots_and_minibatch_order_survive_environment_steps(
         buffer = RolloutBuffer(cfg, envs, torch.device("cpu"), ragged="NoPQ" in gym_id)
         obs, _ = env.reset(seed=123)
         expected = []
+
+        #act
         for step in range(2):
             inputs = build_model_inputs_from_single_obs(obs, torch.device("cpu"))
             expected.append(
@@ -117,6 +138,8 @@ def test_rollout_snapshots_and_minibatch_order_survive_environment_steps(
             obs, _, _, _, _ = env.step(action)
         batch = buffer.flatten(torch.zeros(2, 1), torch.ones(2, 1))
         minibatch = batch.model_inputs([1, 0])
+
+        #assert
         for row, record in enumerate(reversed(expected)):
             for name, tensor in record.items():
                 tensor = tensor[0]
@@ -129,6 +152,7 @@ def test_rollout_snapshots_and_minibatch_order_survive_environment_steps(
 
 
 def test_agents_keep_their_own_critic_configuration_and_cached_values():
+    #arrange
     cfg = Config()
     cfg.actor.pair_embedding_head_in_dim = 6
     cfg.critic.state_embedding_head_in_dim = 3
@@ -147,16 +171,21 @@ def test_agents_keep_their_own_critic_configuration_and_cached_values():
         state_features=torch.ones(2, 4),
         h_value=torch.tensor([[7.0], [9.0]]),
     )
+
+    #act
     learned_values, learned_heuristic = learned_agent.get_value(inputs)
+    heuristic_values, heuristic = heuristic_agent.get_value(inputs)
+
+    #assert
     assert learned_values.shape == (2, 1)
     assert learned_heuristic is None
-    heuristic_values, heuristic = heuristic_agent.get_value(inputs)
     torch.testing.assert_close(heuristic_values, inputs.h_value)
     torch.testing.assert_close(heuristic, inputs.h_value)
 
 
 @pytest.mark.parametrize("state_combiner", ["film", "concat"])
 def test_actor_and_critic_updates_leave_the_other_network_unchanged(state_combiner):
+    #arrange
     cfg = Config()
     cfg.actor.state_embedding_head = "deep-set"
     cfg.actor.state_features_embedding_head = "mlp"
@@ -172,9 +201,6 @@ def test_actor_and_critic_updates_leave_the_other_network_unchanged(state_combin
         model_cfg.state_combiner = state_combiner
 
     agent = Agent(cfg)
-    assert {id(p) for p in agent.actor.parameters()}.isdisjoint(
-        id(p) for p in agent.critic.parameters()
-    )
     inputs = ModelInputs(
         P=torch.randn(2, 3, 6),
         P_mask=torch.tensor([[True, True, False], [True, False, False]]),
@@ -186,9 +212,15 @@ def test_actor_and_critic_updates_leave_the_other_network_unchanged(state_combin
     actor_before = [p.detach().clone() for p in agent.actor.parameters()]
     critic_before = [p.detach().clone() for p in agent.critic.parameters()]
 
+    #act
     agent.actor(inputs)[inputs.P_mask].sum().backward()
-    assert all(p.grad is None for p in agent.critic.parameters())
     optimizer.step()
+
+    #assert
+    assert {id(p) for p in agent.actor.parameters()}.isdisjoint(
+        id(p) for p in agent.critic.parameters()
+    )
+    assert all(p.grad is None for p in agent.critic.parameters())
     assert any(
         not torch.equal(before, after)
         for before, after in zip(actor_before, agent.actor.parameters())
@@ -196,12 +228,17 @@ def test_actor_and_critic_updates_leave_the_other_network_unchanged(state_combin
     for before, after in zip(critic_before, agent.critic.parameters()):
         torch.testing.assert_close(before, after, rtol=0, atol=0)
 
+    #arrange
     optimizer.zero_grad(set_to_none=True)
     actor_before = [p.detach().clone() for p in agent.actor.parameters()]
+
+    #act
     values, _ = agent.get_value(inputs)
     values.sum().backward()
-    assert all(p.grad is None for p in agent.actor.parameters())
     optimizer.step()
+
+    #assert
+    assert all(p.grad is None for p in agent.actor.parameters())
     assert any(
         not torch.equal(before, after)
         for before, after in zip(critic_before, agent.critic.parameters())
@@ -211,9 +248,14 @@ def test_actor_and_critic_updates_leave_the_other_network_unchanged(state_combin
 
 
 def test_training_can_run_twice_without_mutating_the_supplied_config(tmp_path):
+    #arrange
     cfg = _small_config(tmp_path)
     before = asdict(cfg)
+
+    #act
     results = [ppo_training.train(cfg), ppo_training.train(cfg)]
+
+    #assert
     assert asdict(cfg) == before
     for result in results:
         assert result.summary["global_step"] == 4
@@ -229,9 +271,205 @@ def test_training_can_run_twice_without_mutating_the_supplied_config(tmp_path):
         )
 
 
+@pytest.mark.parametrize("configured_output", [False, True])
+def test_grouped_training_keeps_logs_and_final_and_best_models_together(
+    configured_output, monkeypatch, tmp_path
+):
+    #arrange
+    monkeypatch.chdir(tmp_path)
+    cfg = _small_config(tmp_path / "configured-output")
+    if not configured_output:
+        cfg.training.output_directory = None
+    cfg.training.group = "sweep-001"
+    cfg.training.save_actor = True
+    cfg.training.save_critic = True
+    cfg.training.hparam_eval_interval_steps = 4
+    cfg.training.hparam_eval_num_examples = 1
+    cfg.training.hparam_eval_on_train_env = True
+    cfg.training.hparam_eval_on_nopq_env = False
+    cfg.training.system_metrics_enabled = True
+    cfg.training.system_metrics_interval_seconds = 0
+    cfg.training.hparam_metrics_out = str(tmp_path / "summaries" / "trial.json")
+    original_config = asdict(cfg)
+    output_root = tmp_path / "configured-output" if configured_output else tmp_path
+    group_root = output_root / "sweep-001"
+
+    #act
+    result = ppo_training.train(cfg)
+
+    #assert
+    assert asdict(cfg) == original_config
+    assert result.summary["global_step"] == 4
+    assert result.summary["greedy_eval_best_step"] == 4
+    assert result.summary["greedy_eval_last_selection_metric"] is not None
+    run_directory = Path(result.run_directory).resolve()
+    assert run_directory.parent == group_root / "runs"
+    for filename in ("scalars.jsonl", "scalars.csv", "system_metrics.jsonl"):
+        assert (run_directory / filename).is_file()
+    scalar_records = [
+        json.loads(line)
+        for line in (run_directory / "scalars.jsonl").read_text().splitlines()
+    ]
+    scalar_values = {record["tag"]: record["value"] for record in scalar_records}
+    allowed_sections = {
+        "evaluation_training",
+        "evaluation_greedy",
+        "algorithm_policy",
+        "algorithm_value",
+        "algorithm_general",
+        "performance",
+        "system_cpu",
+        "system_gpu",
+        "system_memory",
+    }
+    assert all(
+        tag.count("/") == 1 and tag.split("/", 1)[0] in allowed_sections
+        for tag in scalar_values
+    )
+    assert scalar_values["algorithm_general/policy_updates"] == 1
+    assert scalar_values["algorithm_general/learning_rate"] == cfg.training.learning_rate
+    assert scalar_values["performance/steps_per_second"] >= 0
+    assert scalar_values["evaluation_greedy/selection_metric"] == (
+        result.summary["greedy_eval_last_selection_metric"]
+    )
+    assert scalar_values["evaluation_greedy/train_env_mean_return"] == (
+        result.summary["greedy_eval_last_mean_return"]
+    )
+    assert scalar_values["algorithm_value/weighted_loss"] == pytest.approx(
+        cfg.training.critic_loss_coefficient * scalar_values["algorithm_value/loss"]
+    )
+    assert scalar_values["algorithm_policy/weighted_entropy_bonus"] == pytest.approx(
+        cfg.training.entropy_coefficient * scalar_values["algorithm_policy/entropy_bonus"]
+    )
+    assert {
+        tag for tag in scalar_values if tag.startswith("algorithm_policy/") and "entropy" in tag
+    } == {
+        "algorithm_policy/entropy_raw",
+        "algorithm_policy/entropy_normalized",
+        "algorithm_policy/entropy_bonus",
+        "algorithm_policy/weighted_entropy_bonus",
+    }
+    if result.summary["episodes_completed"]:
+        assert scalar_values["evaluation_training/episodes_completed"] == (
+            result.summary["episodes_completed"]
+        )
+    assert (run_directory / "text" / "hyperparameters.md").is_file()
+    assert (run_directory / "system_metrics.jsonl").read_text().strip()
+    assert set(result.checkpoint_paths) == {"actor", "critic"}
+
+    for kind in ("actor", "critic"):
+        model_directory = group_root / "models" / f"{kind}s"
+        final_path = Path(result.checkpoint_paths[kind]).resolve()
+        best_path = Path(result.summary[f"greedy_eval_best_{kind}_path"]).resolve()
+        assert final_path != best_path
+        for checkpoint in (final_path, best_path):
+            assert checkpoint.parent == model_directory
+            assert checkpoint.suffix == ".pt"
+            assert checkpoint.is_file()
+            assert torch.load(checkpoint, weights_only=True)
+            config_path = checkpoint.with_name(f"{checkpoint.stem}__config.json")
+            saved_config = json.loads(config_path.read_text())
+            assert saved_config["training"]["output_directory"] == cfg.training.output_directory
+            assert saved_config["training"]["group"] == "sweep-001"
+
+    summary_path = tmp_path / "summaries" / "trial.json"
+    assert json.loads(summary_path.read_text()) == result.summary
+    corpus_path = Path(result.summary["greedy_eval_corpus_path"]).resolve()
+    assert corpus_path.parent == tmp_path / "eval_corpora" / "greedy_eval"
+
+
+@pytest.mark.parametrize("normalization_enabled", [False, True])
+def test_update_metrics_keep_values_and_group_optional_normalizers(
+    normalization_enabled, monkeypatch, tmp_path
+):
+    #arrange
+    cfg = _small_config(tmp_path)
+    cfg.training.console_verbosity = "quiet"
+    records = []
+    trainer = ppo_training.PPOTrainer.__new__(ppo_training.PPOTrainer)
+    trainer.cfg = cfg
+    trainer.writer = SimpleNamespace(
+        add_scalar=lambda tag, value, step: records.append((tag, value, step))
+    )
+    trainer.optimizer = SimpleNamespace(param_groups=[{"lr": 0.0002}])
+    trainer.policy_updates = 2
+    trainer.global_step = 128
+    trainer.start_time = 10.0
+    trainer.num_updates = 10
+    trainer.recent_returns = []
+    trainer.last_k_avg_return = None
+    trainer._record_system_metrics = lambda **kwargs: None
+    monkeypatch.setattr(ppo_training.time, "time", lambda: 12.0)
+    trainer.obs_sf_normalizer = (
+        SimpleNamespace(mean=torch.tensor([2.0, 4.0]), var=torch.tensor([1.0, 9.0]))
+        if normalization_enabled else None
+    )
+    trainer.reward_normalizer = (
+        SimpleNamespace(rms=SimpleNamespace(
+            mean=torch.tensor([6.0, 10.0]), var=torch.tensor([4.0, 16.0])
+        ))
+        if normalization_enabled else None
+    )
+    trainer.value_normalizer = (
+        SimpleNamespace(mean=torch.tensor([3.0, 7.0]), var=torch.tensor([9.0, 25.0]))
+        if normalization_enabled else None
+    )
+    metrics = SimpleNamespace(
+        value_loss=2.5,
+        value_clipfracs=[0.25, 0.5],
+        critic_grad_norm=3.0,
+        explained_variance=0.75,
+        policy_loss=-0.2,
+        entropy_bonus=0.4,
+        entropy_raw=0.8,
+        entropy_normalized=0.4,
+        old_approx_kl=0.03,
+        approx_kl=0.02,
+        advantage_means=[1.0, 3.0],
+        advantage_stds=[2.0, 4.0],
+        actor_grad_norm=1.5,
+        clipfracs=[0.1, 0.3],
+    )
+    batch = SimpleNamespace(observations={"state_features": torch.zeros(2, 14)})
+
+    #act
+    trainer._log_update(metrics, batch, update=3)
+
+    #assert
+    assert all(step == 128 for _, _, step in records)
+    assert len({tag for tag, _, _ in records}) == len(records)
+    values = {tag: value for tag, value, _ in records}
+    assert values["performance/steps_per_second"] == 64
+    assert values["algorithm_general/policy_updates"] == 3
+    assert values["algorithm_general/advantage_mean"] == 2
+    assert values["algorithm_general/advantage_std"] == pytest.approx(np.sqrt(10))
+    assert values["algorithm_policy/loss"] == -0.2
+    assert values["algorithm_policy/weighted_entropy_bonus"] == pytest.approx(0.004)
+    assert values["algorithm_policy/clip_fraction"] == pytest.approx(0.2)
+    assert values["algorithm_value/weighted_loss"] == pytest.approx(0.25)
+    assert values["algorithm_value/clip_fraction"] == pytest.approx(0.375)
+    assert values["algorithm_value/explained_variance"] == 0.75
+    normalization_values = {
+        "algorithm_general/state_features_running_mean": 3.0,
+        "algorithm_general/state_features_running_std": 2.0,
+        "algorithm_general/state_features_running_std_max": 3.0,
+        "algorithm_general/state_features_running_std_min": 1.0,
+        "algorithm_general/reward_running_return_mean": 8.0,
+        "algorithm_general/reward_running_return_std": 3.0,
+        "algorithm_value/running_target_mean": 5.0,
+        "algorithm_value/running_target_std": 4.0,
+    }
+    if normalization_enabled:
+        for tag, expected in normalization_values.items():
+            assert values[tag] == pytest.approx(expected)
+    else:
+        assert normalization_values.keys().isdisjoint(values)
+
+
 def test_training_closes_environments_and_log_files_when_rollout_fails(
     tmp_path, monkeypatch
 ):
+    #arrange
     closed = []
     writers = []
     make_envs = ppo_training.create_training_envs
@@ -259,8 +497,12 @@ def test_training_closes_environments_and_log_files_when_rollout_fails(
     monkeypatch.setattr(ppo_training, "create_training_envs", capture_envs)
     monkeypatch.setattr(ppo_training, "create_run_writer", capture_writer)
     monkeypatch.setattr(ppo_training.PPOTrainer, "_collect_rollout", fail_rollout)
+
+    #act
     with pytest.raises(RuntimeError, match="injected rollout failure"):
         ppo_training.train(_small_config(tmp_path))
+
+    #assert
     assert closed == ["envs"]
     assert writers[0]._scalar_handle.closed
     assert writers[0]._scalar_csv_handle.closed
