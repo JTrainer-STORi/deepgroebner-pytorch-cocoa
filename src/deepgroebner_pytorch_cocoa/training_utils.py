@@ -131,8 +131,7 @@ def _wandb_run_active() -> bool:
 
 
 def _generate_run_id() -> str:
-    if wandb is not None:
-        return wandb.util.generate_id()
+    """Create an ID for local and tracked runs without relying on W&B SDK helpers."""
     return uuid.uuid4().hex[:8]
 
 
