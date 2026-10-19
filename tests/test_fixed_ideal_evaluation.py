@@ -13,12 +13,14 @@ from deepgroebner_pytorch_cocoa.greedy_eval import (
     greedy_eval_corpus_cache_path,
     resolve_greedy_eval_corpus,
 )
+from deepgroebner_pytorch_cocoa.ideal_corpus import split_ring_symbols
 from deepgroebner_pytorch_cocoa.ppo_training import PPOTrainer
 from deepgroebner_pytorch_cocoa.training_env import (
     build_env_kwargs_for_gym_id,
     build_fixed_ideal_env_kwargs_for_gym_id,
 )
 from deepgroebner_pytorch_cocoa.training_utils import resolve_training_config
+from deepgroebner_pytorch_cocoa.wrapped import CGLeadMonomialsEnv
 
 
 ENVIRONMENTS = ["BuchbergerExponents-v1", "BuchbergerExponentsNoPQ-v1"]
@@ -61,6 +63,18 @@ def _assert_observations_equal(actual, expected):
         np.testing.assert_array_equal(actual[name], expected[name], err_msg=name)
 
 
+def _seed_for_variable_count(ideal_dist, n_vars):
+    # C++ standard libraries can map the same seed to different ranged samples.
+    # Find a seed locally so each case exercises its intended ring size.
+    sampler = CGLeadMonomialsEnv(ideal_dist=ideal_dist, elimination="none", fix_ideal=False)
+    for seed in range(128):
+        sampler.seed(seed)
+        sampler.reset()
+        if len(split_ring_symbols(sampler.initial_ideal()["symbols"])) == n_vars:
+            return seed
+    pytest.fail(f"Could not sample a {n_vars}-variable ring from {ideal_dist}")
+
+
 @pytest.mark.parametrize("gym_id", ENVIRONMENTS)
 @pytest.mark.parametrize(
     "source,expected_ring,expected_nvars",
@@ -83,6 +97,8 @@ def test_greedy_corpus_replays_the_training_ideal_and_ring(
         cfg.env.basis_elements = "x^2-y,x*y-1"
     else:
         cfg.env.ideal_dist = source
+        if source in {"(2-3)-3-2-weighted", "geom-(3-4)"}:
+            cfg.env.env_seed = _seed_for_variable_count(source, expected_nvars)
     cfg = resolve_training_config(cfg)
     seeds = build_greedy_eval_seeds(cfg, True)
 
