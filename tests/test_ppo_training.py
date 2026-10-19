@@ -30,13 +30,57 @@ def _small_config(tmp_path):
     cfg.training.total_timesteps = 4
     cfg.training.num_epochs_per_update = 1
     cfg.training.num_minibatches = 2
-    cfg.training.hparam_eval_num_examples = 0
+    cfg.training.greedy_eval_num_examples = 0
     cfg.training.cuda = False
     cfg.training.track = False
     cfg.training.pytorch_num_threads = 1
     cfg.training.system_metrics_enabled = False
     cfg.training.output_directory = str(tmp_path)
     return cfg
+
+
+@pytest.mark.parametrize(
+    "pair_head", ["alphastar-buchberger-pair-transformer", "symmetric-per-entity-mlp"]
+)
+@pytest.mark.parametrize("state_head", [None, "deep-set"])
+def test_training_attention_diagnostics_follow_their_own_completed_update_frequency(
+    pair_head, state_head, tmp_path,
+):
+    #arrange
+    cfg = _small_config(tmp_path)
+    cfg.env.N = 4
+    cfg.actor.pair_embedding_head = pair_head
+    cfg.actor.state_embedding_head = state_head
+    cfg.training.total_timesteps = 12
+    cfg.training.attention_diagnostic_frequency = 2
+    cfg.training.counterfactual_diagnostic_frequency = 3
+
+    #act
+    result = ppo_training.train(cfg)
+    records = [
+        json.loads(line)
+        for line in (Path(result.run_directory) / "scalars.jsonl").read_text().splitlines()
+    ]
+    attention_records = [
+        record for record in records if record["tag"].startswith("policy_function/diagnostic_attn_")
+    ]
+    counterfactual_records = [
+        record for record in records if record["tag"].startswith("policy_function/diagnostic_cf_")
+    ]
+
+    #assert
+    assert result.summary["policy_updates"] == 3
+    if pair_head == "alphastar-buchberger-pair-transformer":
+        assert attention_records
+        assert {record["step"] for record in attention_records} == {8}
+        assert all(np.isfinite(record["value"]) for record in attention_records)
+    else:
+        assert not attention_records
+    if state_head is not None:
+        assert counterfactual_records
+        assert {record["step"] for record in counterfactual_records} == {12}
+    else:
+        assert not counterfactual_records
 
 
 @pytest.mark.parametrize(
@@ -283,10 +327,10 @@ def test_grouped_training_keeps_logs_and_final_and_best_models_together(
     cfg.training.group = "sweep-001"
     cfg.training.save_actor = True
     cfg.training.save_critic = True
-    cfg.training.hparam_eval_interval_steps = 4
-    cfg.training.hparam_eval_num_examples = 1
-    cfg.training.hparam_eval_on_train_env = True
-    cfg.training.hparam_eval_on_nopq_env = False
+    cfg.training.greedy_eval_interval_steps = 4
+    cfg.training.greedy_eval_num_examples = 1
+    cfg.training.greedy_eval_on_train_env = True
+    cfg.training.greedy_eval_on_nopq_env = False
     cfg.training.system_metrics_enabled = True
     cfg.training.system_metrics_interval_seconds = 0
     cfg.training.hparam_metrics_out = str(tmp_path / "summaries" / "trial.json")
@@ -312,22 +356,24 @@ def test_grouped_training_keeps_logs_and_final_and_best_models_together(
     ]
     scalar_values = {record["tag"]: record["value"] for record in scalar_records}
     allowed_sections = {
-        "evaluation_training",
+        "training_rollouts",
         "evaluation_greedy",
-        "algorithm_policy",
-        "algorithm_value",
+        "policy_function",
+        "value_function",
         "algorithm_general",
         "performance",
         "system_cpu",
         "system_gpu",
         "system_memory",
+        "system_general",
+        "priority_queue",
     }
     assert all(
         tag.count("/") == 1 and tag.split("/", 1)[0] in allowed_sections
         for tag in scalar_values
     )
     assert scalar_values["algorithm_general/policy_updates"] == 1
-    assert scalar_values["algorithm_general/learning_rate"] == cfg.training.learning_rate
+    assert "algorithm_general/learning_rate" not in scalar_values
     assert scalar_values["performance/steps_per_second"] >= 0
     assert scalar_values["evaluation_greedy/selection_metric"] == (
         result.summary["greedy_eval_last_selection_metric"]
@@ -335,22 +381,22 @@ def test_grouped_training_keeps_logs_and_final_and_best_models_together(
     assert scalar_values["evaluation_greedy/train_env_mean_return"] == (
         result.summary["greedy_eval_last_mean_return"]
     )
-    assert scalar_values["algorithm_value/weighted_loss"] == pytest.approx(
-        cfg.training.critic_loss_coefficient * scalar_values["algorithm_value/loss"]
+    assert scalar_values["value_function/weighted_loss"] == pytest.approx(
+        cfg.training.critic_loss_coefficient * scalar_values["value_function/loss"]
     )
-    assert scalar_values["algorithm_policy/weighted_entropy_bonus"] == pytest.approx(
-        cfg.training.entropy_coefficient * scalar_values["algorithm_policy/entropy_bonus"]
+    assert scalar_values["policy_function/weighted_entropy_bonus"] == pytest.approx(
+        cfg.training.entropy_coefficient * scalar_values["policy_function/entropy_bonus"]
     )
     assert {
-        tag for tag in scalar_values if tag.startswith("algorithm_policy/") and "entropy" in tag
+        tag for tag in scalar_values if tag.startswith("policy_function/") and "entropy" in tag
     } == {
-        "algorithm_policy/entropy_raw",
-        "algorithm_policy/entropy_normalized",
-        "algorithm_policy/entropy_bonus",
-        "algorithm_policy/weighted_entropy_bonus",
+        "policy_function/entropy_raw",
+        "policy_function/entropy_normalized",
+        "policy_function/entropy_bonus",
+        "policy_function/weighted_entropy_bonus",
     }
     if result.summary["episodes_completed"]:
-        assert scalar_values["evaluation_training/episodes_completed"] == (
+        assert scalar_values["training_rollouts/episodes_completed"] == (
             result.summary["episodes_completed"]
         )
     assert (run_directory / "text" / "hyperparameters.md").is_file()
@@ -379,12 +425,24 @@ def test_grouped_training_keeps_logs_and_final_and_best_models_together(
 
 
 @pytest.mark.parametrize("normalization_enabled", [False, True])
+@pytest.mark.parametrize("anneal_learning_rate", [False, True])
 def test_update_metrics_keep_values_and_group_optional_normalizers(
-    normalization_enabled, monkeypatch, tmp_path
+    normalization_enabled, anneal_learning_rate, monkeypatch, tmp_path
 ):
     #arrange
     cfg = _small_config(tmp_path)
     cfg.training.console_verbosity = "quiet"
+    cfg.training.anneal_learning_rate = anneal_learning_rate
+    expected_general_tags = {"algorithm_general/policy_updates"}
+    if anneal_learning_rate:
+        expected_general_tags.add("algorithm_general/learning_rate")
+    if normalization_enabled:
+        expected_general_tags.update(
+            {
+                "algorithm_general/reward_running_return_mean",
+                "algorithm_general/reward_running_return_std",
+            }
+        )
     records = []
     trainer = ppo_training.PPOTrainer.__new__(ppo_training.PPOTrainer)
     trainer.cfg = cfg
@@ -439,31 +497,92 @@ def test_update_metrics_keep_values_and_group_optional_normalizers(
     assert all(step == 128 for _, _, step in records)
     assert len({tag for tag, _, _ in records}) == len(records)
     values = {tag: value for tag, value, _ in records}
+    assert {
+        tag for tag in values if tag.startswith("algorithm_general/")
+    } == expected_general_tags
     assert values["performance/steps_per_second"] == 64
     assert values["algorithm_general/policy_updates"] == 3
-    assert values["algorithm_general/advantage_mean"] == 2
-    assert values["algorithm_general/advantage_std"] == pytest.approx(np.sqrt(10))
-    assert values["algorithm_policy/loss"] == -0.2
-    assert values["algorithm_policy/weighted_entropy_bonus"] == pytest.approx(0.004)
-    assert values["algorithm_policy/clip_fraction"] == pytest.approx(0.2)
-    assert values["algorithm_value/weighted_loss"] == pytest.approx(0.25)
-    assert values["algorithm_value/clip_fraction"] == pytest.approx(0.375)
-    assert values["algorithm_value/explained_variance"] == 0.75
+    if anneal_learning_rate:
+        assert values["algorithm_general/learning_rate"] == 0.0002
+    else:
+        assert "algorithm_general/learning_rate" not in values
+    assert values["value_function/advantage_mean"] == 2
+    assert values["value_function/advantage_std"] == pytest.approx(np.sqrt(10))
+    assert values["policy_function/loss"] == -0.2
+    assert values["policy_function/weighted_entropy_bonus"] == pytest.approx(0.004)
+    assert values["policy_function/clip_fraction"] == pytest.approx(0.2)
+    assert values["value_function/weighted_loss"] == pytest.approx(0.25)
+    assert values["value_function/clip_fraction"] == pytest.approx(0.375)
+    assert values["value_function/explained_variance"] == 0.75
     normalization_values = {
-        "algorithm_general/state_features_running_mean": 3.0,
-        "algorithm_general/state_features_running_std": 2.0,
-        "algorithm_general/state_features_running_std_max": 3.0,
-        "algorithm_general/state_features_running_std_min": 1.0,
+        "policy_function/state_features_running_mean": 3.0,
+        "policy_function/state_features_running_std": 2.0,
+        "policy_function/state_features_running_std_max": 3.0,
+        "policy_function/state_features_running_std_min": 1.0,
         "algorithm_general/reward_running_return_mean": 8.0,
         "algorithm_general/reward_running_return_std": 3.0,
-        "algorithm_value/running_target_mean": 5.0,
-        "algorithm_value/running_target_std": 4.0,
+        "value_function/running_target_mean": 5.0,
+        "value_function/running_target_std": 4.0,
     }
     if normalization_enabled:
         for tag, expected in normalization_values.items():
             assert values[tag] == pytest.approx(expected)
     else:
         assert normalization_values.keys().isdisjoint(values)
+
+
+@pytest.mark.parametrize("use_final_info", [False, True])
+def test_completed_episodes_log_only_training_rollout_metrics(use_final_info):
+    #arrange
+    records = []
+    trainer = ppo_training.PPOTrainer.__new__(ppo_training.PPOTrainer)
+    trainer.writer = SimpleNamespace(
+        add_scalar=lambda tag, value, step: records.append((tag, value, step))
+    )
+    trainer.global_step = 128
+    trainer.episode_counter = 0
+    trainer.recent_returns = []
+    trainer.max_episodic_return = float("-inf")
+    trainer.min_episodic_return = float("inf")
+    episode_info = {
+        "_episode": np.array([True, False, True]),
+        "episode": {
+            "r": np.array([-6.0, 0.0, -2.0]),
+            "l": np.array([4, 0, 2]),
+        },
+    }
+    infos = {"final_info": episode_info} if use_final_info else episode_info
+    expected_episodes = [
+        {
+            "episodic_return": -6.0,
+            "max_episodic_return": -6.0,
+            "min_episodic_return": -6.0,
+            "episodic_return_last_100_avg": -6.0,
+            "episodic_length": 4,
+            "episodes_completed": 1,
+        },
+        {
+            "episodic_return": -2.0,
+            "max_episodic_return": -2.0,
+            "min_episodic_return": -6.0,
+            "episodic_return_last_100_avg": -4.0,
+            "episodic_length": 2,
+            "episodes_completed": 2,
+        },
+    ]
+    expected_records = [
+        (f"training_rollouts/{key}", value, 128)
+        for episode in expected_episodes
+        for key, value in episode.items()
+    ]
+
+    #act
+    trainer._log_completed_episodes(infos)
+
+    #assert
+    assert records == expected_records
+    assert trainer.episode_counter == 2
+    assert trainer.recent_returns == [-6.0, -2.0]
 
 
 def test_training_closes_environments_and_log_files_when_rollout_fails(

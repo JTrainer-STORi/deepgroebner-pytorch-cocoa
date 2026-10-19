@@ -165,7 +165,7 @@ namespace CoCoA
   /**
  * Selection option for selecting next pairs from the pair set. Used when mimicing heuristic pair selection.
  */
-  enum class SelectionType {First, Last, Degree, Normal, Sugar, Random, TrueDegree};
+  enum class SelectionType {First, Degree, Normal, Sugar, Random, TrueDegree};
 
   struct SelectionResult {
     std::function<bool(const SPair&, const SPair&)> cmp; // empty if random
@@ -295,9 +295,21 @@ std::pair<std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector<R
     // function forwhen a heuristic based value function is used
     double value(std::string strategy = "degree", double gamma = 1.0) const;
 
+    // Evaluate a seeded heuristic on a copy of the current complete pair set.
+    BuchbergerStats heuristic_stats(std::string strategy, int seed) const;
+
     // Independently check the current basis against CoCoALib's GBasis of the
     // original reset generators, without completing Buchberger's algorithm on G.
     bool is_groebner_basis() const;
+
+    // Snapshot of the most recent reset: coefficient ring, symbols, then the
+    // original generators, all serialized for constructing the same ideal.
+    std::vector<std::string> initial_ideal() const;
+
+    void set_ideal_corpus(const std::vector<std::string>& coeff_rings,
+                          const std::vector<std::string>& symbols,
+                          const std::vector<std::vector<std::string>>& bases);
+    int corpus_index() const { return ideal_gen ? ideal_gen->corpus_index() : -1; }
 
     // classes member vairables are those that are relevant to Buchberger's algorithm like the vector of basis elements for the basis set, the vector of SPairs for the pair set, we keep track of sugars, leading monomials and degree of leading monomials to cut down on the amount of recalculation when using heuristics for value functions or priority queue
     std::vector<RingElem> G;
@@ -387,6 +399,15 @@ std::pair<std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector<R
 
     bool is_groebner_basis() const { return env.is_groebner_basis(); }
 
+    std::vector<std::string> initial_ideal() const { return env.initial_ideal(); }
+
+    void set_ideal_corpus(const std::vector<std::string>& coeff_rings,
+                          const std::vector<std::string>& symbols,
+                          const std::vector<std::vector<std::string>>& bases) {
+      env.set_ideal_corpus(coeff_rings, symbols, bases);
+    }
+    int corpus_index() const { return env.corpus_index(); }
+
     std::vector<int> leads;
     int cols;
     int p_cols;
@@ -466,7 +487,18 @@ std::pair<std::vector<RingElem>, BuchbergerStats> buchberger(const std::vector<R
 
       double value(std::string strategy = "degree", double gamma = 1.0) const { return env.value(strategy, gamma); };
 
+      BuchbergerStats heuristic_stats(std::string strategy, int seed) const {
+        return env.heuristic_stats(strategy, seed);
+      }
+
       bool is_groebner_basis() const { return env.is_groebner_basis(); }
+
+      void set_ideal_corpus(const std::vector<std::string>& coeff_rings,
+                            const std::vector<std::string>& symbols,
+                            const std::vector<std::vector<std::string>>& bases) {
+        env.set_ideal_corpus(coeff_rings, symbols, bases);
+      }
+      int corpus_index() const { return env.corpus_index(); }
 
       std::vector<int> state;
       std::vector<int> G_leads;

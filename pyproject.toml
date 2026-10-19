@@ -28,6 +28,9 @@ dev = [
   "pytest>=8.0",
 ]
 
+[project.scripts]
+deepgroebner-pytorch-cocoa-verify = "deepgroebner_pytorch_cocoa.verify_cli:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

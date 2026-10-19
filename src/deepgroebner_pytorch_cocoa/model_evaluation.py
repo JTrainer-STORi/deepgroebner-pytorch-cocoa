@@ -1,4 +1,4 @@
-"""Evaluate a saved policy checkpoint on a fixed corpus of ideals."""
+"""Evaluate a saved policy checkpoint on a fixed test corpus of ideals."""
 
 from __future__ import annotations
 
@@ -17,6 +17,13 @@ import tyro
 
 from .combined_networks import CombinedPolicyNetwork
 from .config_dataclasses import ActorConfig, EnvConfig
+from .evaluation_resources import (
+    ResourceMeasurement,
+    format_resource_summary,
+    resource_metadata,
+    resource_statistics,
+)
+from .ideal_corpus import split_ring_symbols
 from .model_input_utils import (
     build_model_inputs_from_single_obs,
 )
@@ -44,10 +51,10 @@ CHECKPOINT_TYPES = ("auto", "best_greedy_eval", "final")
 
 
 @dataclass
-class EvalCorpusConfig:
-    """Evaluate a saved actor checkpoint on a fixed ideal corpus."""
+class TestCorpusConfig:
+    """Evaluate a saved actor checkpoint on a fixed test corpus of ideals."""
 
-    corpus: str
+    corpus: str # Path to a JSONL test corpus.
     model_name: str
     checkpoint_type: Literal["auto", "best_greedy_eval", "final"] = "auto"
     models_dir: str = "models"
@@ -58,6 +65,10 @@ class EvalCorpusConfig:
     gym_id: str | None = "BuchbergerExponentsNoPQ-v1"
     device: Literal["auto", "cpu", "cuda"] = "auto"
     verbosity: Literal["quiet", "normal", "verbose"] = "normal"
+
+
+# Preserve the former Python API name for existing callers.
+EvalCorpusConfig = TestCorpusConfig
 
 
 @dataclass
@@ -71,7 +82,7 @@ class EvaluationResult:
 
 
 def _console_print(
-    cfg: EvalCorpusConfig,
+    cfg: TestCorpusConfig,
     *parts: object,
     level: Literal["normal", "verbose"] = "normal",
 ) -> None:
@@ -91,37 +102,46 @@ def _space_last_dim(space: Any) -> int:
 
 
 def _split_symbols(symbols: str) -> list[str]:
-    return [tok.strip() for tok in symbols.split(",") if tok.strip()]
+    return list(split_ring_symbols(symbols))
 
 
 def _resolve_corpus_symbols(corpus_rows: list[dict[str, Any]]) -> str:
     if not corpus_rows:
-        raise ValueError("Empty corpus")
+        raise ValueError("Empty test corpus")
 
-    parsed_rows: list[list[str]] = []
     widest_symbols: list[str] = []
     for row_idx, row in enumerate(corpus_rows):
         symbols = row.get("symbols")
         if not isinstance(symbols, str) or not symbols.strip():
             raise ValueError(
-                f"Corpus row {row_idx} is missing a non-empty 'symbols' field."
+                f"Test corpus row {row_idx} is missing a non-empty 'symbols' field."
             )
         row_symbols = _split_symbols(symbols)
-        parsed_rows.append(row_symbols)
         if len(row_symbols) > len(widest_symbols):
             widest_symbols = row_symbols.copy()
 
     if not widest_symbols:
-        raise ValueError("Corpus does not contain any symbols.")
+        raise ValueError("Test corpus does not contain any symbols.")
 
-    resolved = widest_symbols.copy()
-    seen = set(resolved)
-    for row_symbols in parsed_rows:
-        for symbol in row_symbols:
-            if symbol not in seen:
-                seen.add(symbol)
-                resolved.append(symbol)
-    return ",".join(resolved)
+    return ",".join(widest_symbols)
+
+
+def _resolve_observation_nvars(
+    env_cfg: EnvConfig, corpus_rows: list[dict[str, Any]]
+) -> int:
+    """Keep the checkpoint's variable width while evaluating each ideal in its ring."""
+    corpus_nvars = len(_split_symbols(_resolve_corpus_symbols(corpus_rows)))
+    training_nvars = (
+        len(_split_symbols(env_cfg.symbols))
+        if env_cfg.symbols is not None
+        else corpus_nvars
+    )
+    if corpus_nvars > training_nvars:
+        raise ValueError(
+            f"Test corpus requires {corpus_nvars} variables, but the training "
+            f"configuration supports at most {training_nvars}."
+        )
+    return training_nvars
 
 
 def _normalize_gym_id(gym_id: str | None) -> str | None:
@@ -415,12 +435,12 @@ def _load_corpus_rows(corpus_path: Path) -> list[dict[str, Any]]:
             if line:
                 rows.append(json.loads(line))
     if not rows:
-        raise ValueError("Empty corpus")
+        raise ValueError("Empty test corpus")
     return rows
 
 
 def _build_env_kwargs(
-    env_cfg: EnvConfig, corpus_symbols: str, row: dict[str, Any]
+    env_cfg: EnvConfig, observation_nvars: int, row: dict[str, Any]
 ) -> dict[str, Any]:
     env_kwargs = {
         "ideal_dist": None,
@@ -431,7 +451,8 @@ def _build_env_kwargs(
         "fix_ideal": True,
         "k": env_cfg.k,
         "coeff_ring": row["coeff_ring"],
-        "symbols": corpus_symbols,
+        "symbols": row["symbols"],
+        "observation_nvars": observation_nvars,
         "basis_elements": row["basis_elements"],
     }
     if env_cfg.gym_id != "BuchbergerExponentsNoPQ-v1":
@@ -474,11 +495,12 @@ def _build_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "length_median": float(np.median(lengths)),
         "length_max": float(lengths.max()),
         "queue_usage": _build_queue_usage_summary(rows),
+        **resource_statistics(rows),
     }
 
 
-def evaluate(cfg: EvalCorpusConfig) -> EvaluationResult:
-    """Evaluate a checkpoint and return metrics, episode rows, and written artifacts.
+def evaluate(cfg: TestCorpusConfig) -> EvaluationResult:
+    """Evaluate a checkpoint on a test corpus and return metrics and written artifacts.
 
     Explicit paths allow this API to run from any working directory. Relative paths
     are resolved against the caller's current directory, as in the command-line tool.
@@ -488,6 +510,7 @@ def evaluate(cfg: EvalCorpusConfig) -> EvaluationResult:
         if (cfg.device == "auto" and torch.cuda.is_available())
         else cfg.device if cfg.device != "auto" else "cpu"
     )
+    total_resources = ResourceMeasurement(device)
 
     model_path = _resolve_model_path(
         cfg.model_name,
@@ -508,15 +531,15 @@ def evaluate(cfg: EvalCorpusConfig) -> EvaluationResult:
 
     corpus_path = Path(cfg.corpus).expanduser().resolve()
     corpus_rows = _load_corpus_rows(corpus_path)
-    corpus_symbols = _resolve_corpus_symbols(corpus_rows)
+    observation_nvars = _resolve_observation_nvars(env_cfg, corpus_rows)
 
     _console_print(cfg, f"Model checkpoint: {model_path}")
     _console_print(cfg, f"Config snapshot: {config_path}")
-    _console_print(cfg, f"Corpus: {corpus_path} ({len(corpus_rows)} ideals)")
+    _console_print(cfg, f"Test corpus: {corpus_path} ({len(corpus_rows)} ideals)")
     _console_print(cfg, f"Evaluation gym id: {env_cfg.gym_id}")
 
     base_env = gym.make(
-        env_cfg.gym_id, **_build_env_kwargs(env_cfg, corpus_symbols, corpus_rows[0])
+        env_cfg.gym_id, **_build_env_kwargs(env_cfg, observation_nvars, corpus_rows[0])
     )
     try:
         actor = _load_actor(
@@ -540,10 +563,11 @@ def evaluate(cfg: EvalCorpusConfig) -> EvaluationResult:
     with torch.no_grad():
         for row_idx, row in enumerate(corpus_rows):
             env = gym.make(
-                env_cfg.gym_id, **_build_env_kwargs(env_cfg, corpus_symbols, row)
+                env_cfg.gym_id, **_build_env_kwargs(env_cfg, observation_nvars, row)
             )
             try:
                 obs, _ = env.reset(seed=row.get("episode_seed"))
+                episode_resources = ResourceMeasurement(device)
                 done = False
                 total_return = 0.0
                 steps = 0
@@ -561,6 +585,7 @@ def evaluate(cfg: EvalCorpusConfig) -> EvaluationResult:
                     done = bool(terminated or truncated)
                     total_return -= float(reward)
                     steps += 1
+                resources = episode_resources.finish()
             finally:
                 env.close()
 
@@ -572,27 +597,31 @@ def evaluate(cfg: EvalCorpusConfig) -> EvaluationResult:
                 "return": float(total_return),
                 "length": int(steps),
                 **_compute_queue_usage_stats(pair_counts, pq_budget),
+                **resources,
             }
             rows.append(result_row)
             _console_print(
                 cfg,
                 f"[{row_idx + 1}/{len(corpus_rows)}] return={result_row['return']:.3f} "
-                f"length={result_row['length']}",
+                f"length={result_row['length']} {format_resource_summary(resources)}",
                 level="verbose",
             )
+
+    resources = total_resources.finish()
+    summary = _build_summary(rows)
+    summary["resources"] = resources
 
     if cfg.output_dir:
         out_dir = Path(cfg.output_dir).expanduser()
     else:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_dir = Path(cfg.output_root).expanduser() / (
-            f"eval_corpus__{env_cfg.gym_id}__{timestamp}__{model_path.stem}"
+            f"test_corpus__{env_cfg.gym_id}__{timestamp}__{model_path.stem}"
         )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     _write_episode_results(rows, out_dir)
 
-    summary = _build_summary(rows)
     with (out_dir / "summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, sort_keys=True)
 
@@ -601,17 +630,31 @@ def evaluate(cfg: EvalCorpusConfig) -> EvaluationResult:
         "config_path": str(config_path),
         "corpus": str(corpus_path),
         "gym_id": env_cfg.gym_id,
+        "observation_nvars": observation_nvars,
         "device": str(device),
         "checkpoint_type": cfg.checkpoint_type,
+        "resource_measurements": {
+            **resource_metadata(),
+            "total_timing_scope": (
+                "Checkpoint, configuration, and corpus loading, environment "
+                "setup/reset/close, policy loading, and all rollouts; excludes "
+                "report writing."
+            ),
+            "episode_timing_scope": (
+                "Policy inference and environment steps after reset; excludes "
+                "environment creation, reset, close, and report writing."
+            ),
+        },
     }
     with (out_dir / "metadata.json").open("w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2, sort_keys=True)
 
     if cfg.verbosity == "quiet":
-        print(f"Wrote corpus evaluation to {out_dir}")
+        print(f"Wrote test corpus evaluation to {out_dir}")
     else:
-        print(f"Wrote corpus evaluation to {out_dir}")
+        print(f"Wrote test corpus evaluation to {out_dir}")
         print(f"Mean return: {summary['return_mean']:.3f}")
+        print(format_resource_summary(resources))
 
     return EvaluationResult(
         summary=summary,
@@ -627,8 +670,8 @@ def evaluate(cfg: EvalCorpusConfig) -> EvaluationResult:
 
 
 def main(args: list[str] | None = None) -> EvaluationResult:
-    """Parse command-line options and evaluate the selected checkpoint."""
-    return evaluate(tyro.cli(EvalCorpusConfig, args=args))
+    """Parse command-line options and evaluate the checkpoint on the test corpus."""
+    return evaluate(tyro.cli(TestCorpusConfig, args=args))
 
 
 if __name__ == "__main__":

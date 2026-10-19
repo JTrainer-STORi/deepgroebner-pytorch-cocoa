@@ -33,14 +33,14 @@ def _stats(mean_return, elapsed_seconds):
 
 def _evaluation(monkeypatch, *, train, nopq):
     cfg = Config()
-    cfg.training.hparam_eval_interval_steps = 10
-    cfg.training.hparam_eval_num_examples = 2
-    cfg.training.hparam_eval_on_train_env = train
-    cfg.training.hparam_eval_on_nopq_env = nopq
+    cfg.training.greedy_eval_interval_steps = 10
+    cfg.training.greedy_eval_num_examples = 2
+    cfg.training.greedy_eval_on_train_env = train
+    cfg.training.greedy_eval_on_nopq_env = nopq
     cfg.training.console_verbosity = "quiet"
     stats = {
         cfg.env.gym_id: _stats(-25.0, 1.25),
-        cfg.training.hparam_eval_nopq_gym_id: _stats(-14.0, 2.5),
+        "BuchbergerExponentsNoPQ-v1": _stats(-14.0, 2.5),
     }
     corpus = [{"episode_seed": 10000}, {"episode_seed": 10001}]
     monkeypatch.setattr(
@@ -117,7 +117,7 @@ def test_greedy_metrics_log_each_target_once_without_primary_aliases(
         targets.append(("train_env", context.stats[context.cfg.env.gym_id]))
     if nopq:
         targets.append(
-            ("nopq", context.stats[context.cfg.training.hparam_eval_nopq_gym_id])
+            ("nopq", context.stats["BuchbergerExponentsNoPQ-v1"])
         )
     expected_tags = {"evaluation_greedy/selection_metric"}
     for target, stats in targets:
@@ -141,7 +141,7 @@ def test_greedy_metrics_log_each_target_once_without_primary_aliases(
     assert set(metrics) == expected_tags
 
     primary_gym = (
-        context.cfg.training.hparam_eval_nopq_gym_id if nopq else context.cfg.env.gym_id
+        "BuchbergerExponentsNoPQ-v1" if nopq else context.cfg.env.gym_id
     )
     primary_stats = context.stats[primary_gym]
     initial_score = primary_stats["mean_return_completed_only"]
@@ -177,6 +177,9 @@ def test_greedy_metrics_log_each_target_once_without_primary_aliases(
     assert summary["greedy_eval_best_step"] == 10
     assert summary["greedy_eval_best_actor_path"] == "best-actor.pt"
     assert summary["greedy_eval_best_critic_path"] == "best-critic.pt"
+    assert summary["greedy_eval_nopq_gym_id"] == (
+        "BuchbergerExponentsNoPQ-v1" if nopq else None
+    )
 
 
 @pytest.mark.parametrize("completed_mean", [None, float("nan"), float("inf")])

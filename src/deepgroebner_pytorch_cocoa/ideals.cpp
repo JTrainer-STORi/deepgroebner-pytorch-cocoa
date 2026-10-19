@@ -463,12 +463,8 @@ namespace CoCoA
     return static_cast<int>(c);
   }
 
-  std::discrete_distribution<int> degree_distribution(int n, int d, DistributionType dist, bool constants) {
-    std::vector<int> count;
-    if (constants)
-      count.push_back(1);
-    else
-      count.push_back(0);
+  std::discrete_distribution<int> degree_distribution(int n, int d, DistributionType dist) {
+    std::vector<int> count{0};
 
     switch (dist) {
         case DistributionType::Uniform:
@@ -492,7 +488,7 @@ namespace CoCoA
     return {count.begin(), count.end()};
   }
 
-  RandomBinomialIdealGenerator::RandomBinomialIdealGenerator(int n, int d, int s, DistributionType dist, bool constants, bool homogeneous, bool pure) : n(n), s(s), homogeneous(homogeneous), pure(pure) {
+  RandomBinomialIdealGenerator::RandomBinomialIdealGenerator(int n, int d, int s, DistributionType dist) : n(n), s(s) {
     
     PPOrdering ord = StdDegRevLex(n);
 
@@ -503,7 +499,7 @@ namespace CoCoA
     for (int i = 0; i < d + 1; i++) {
         bases.push_back(basis(PPM, n, i));
     }
-    degree_dist = degree_distribution(n, d, dist, constants);
+    degree_dist = degree_distribution(n, d, dist);
     std::random_device rand;
     rng.seed(rand());
 
@@ -517,14 +513,9 @@ namespace CoCoA
     ring P = NewPolyRing(NewZZmod(32003), IndetNames);
 
     for (int i = 0; i < s; i++) {
-      int c = (pure) ? -1 : coeff_dist(rng);
-      int d1, d2;
-      if (homogeneous) {
-        d1 = d2 = degree_dist(rng);
-      } else {
-        d1 = degree_dist(rng);
-        d2 = degree_dist(rng);
-      }
+      int c = coeff_dist(rng);
+      int d1 = degree_dist(rng);
+      int d2 = degree_dist(rng);
 
       bool success = false;
       for (int trials = 0; trials < 1000; trials++) {
@@ -562,12 +553,9 @@ namespace CoCoA
       int d_max,
       int s_min,
       int s_max,
-      DistributionType dist,
-      bool constants,
-      bool homogeneous,
-      bool pure)
+      DistributionType dist)
       : n_min(n_min), n_max(n_max), d_min(d_min), d_max(d_max), s_min(s_min), s_max(s_max),
-        dist(dist), constants(constants), homogeneous(homogeneous), pure(pure) {
+        dist(dist) {
     if (n_min < 1 || d_min < 1 || s_min < 1) {
       throw std::invalid_argument("Range bounds for n, d, s must all be >= 1");
     }
@@ -602,7 +590,7 @@ namespace CoCoA
     PrecomputedNDData precomputed{
       NewPolyRing(NewZZmod(32003), indet_names),
       {},
-      degree_distribution(n, d, dist, constants)
+      degree_distribution(n, d, dist)
     };
 
     precomputed.bases.reserve(static_cast<size_t>(d + 1));
@@ -628,15 +616,9 @@ namespace CoCoA
     std::vector<RingElem> mygens;
 
     for (int i = 0; i < s; i++) {
-      int c = (pure) ? -1 : coeff_dist(rng);
-
-      int d1, d2;
-      if (homogeneous) {
-        d1 = d2 = precomputed.degree_dist(rng);
-      } else {
-        d1 = precomputed.degree_dist(rng);
-        d2 = precomputed.degree_dist(rng);
-      }
+      int c = coeff_dist(rng);
+      int d1 = precomputed.degree_dist(rng);
+      int d2 = precomputed.degree_dist(rng);
 
       bool success = false;
       for (int trials = 0; trials < 1000; trials++) {
@@ -850,8 +832,8 @@ namespace CoCoA
       return std::make_unique<BenchmarkIdealGenerator>(classes, n_range.lo, n_range.hi);
     }
 
-    if (dist_args.size() < 4) {
-      throw std::invalid_argument("Malformed ideal_dist. Expected at least 4 fields: n-d-s-type or (n0-n1)-(d0-d1)-(s0-s1)-type");
+    if (dist_args.size() != 4) {
+      throw std::invalid_argument("Malformed binomial ideal_dist. Expected exactly 4 fields: n-d-s-type or (n0-n1)-(d0-d1)-(s0-s1)-type. Optional suffixes are not supported.");
     }
 
     std::map<std::string, DistributionType> dist_types = {
@@ -870,19 +852,15 @@ namespace CoCoA
     }
     DistributionType dist = dist_it->second;
 
-    bool constants = (std::find(dist_args.begin(), dist_args.end(), "consts") != dist_args.end());
-    bool homogeneous = (std::find(dist_args.begin(), dist_args.end(), "homog") != dist_args.end());
-    bool pure = (std::find(dist_args.begin(), dist_args.end(), "pure") != dist_args.end());
-
     if (n_range.lo == n_range.hi && d_range.lo == d_range.hi && s_range.lo == s_range.hi) {
-      return std::make_unique<RandomBinomialIdealGenerator>(n_range.lo, d_range.lo, s_range.lo, dist, constants, homogeneous, pure);
+      return std::make_unique<RandomBinomialIdealGenerator>(n_range.lo, d_range.lo, s_range.lo, dist);
     }
 
     return std::make_unique<RangeRandomBinomialIdealGenerator>(
       n_range.lo, n_range.hi,
       d_range.lo, d_range.hi,
       s_range.lo, s_range.hi,
-      dist, constants, homogeneous, pure
+      dist
     );
 
   }

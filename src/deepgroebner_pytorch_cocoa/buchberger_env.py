@@ -2,6 +2,7 @@ import gymnasium as gym
 import numpy as np
 from typing import Optional, Sequence
 from deepgroebner_pytorch_cocoa.wrapped import CGLeadMonomialsEnv, CNoPQEnv
+from .ideal_corpus import load_ideal_corpus, split_ring_symbols, validate_corpus_options
 
 
 _BENCHMARK_CLASSES = {"katsura", "cyclic", "acyclic", "eco", "noon", "reimer"}
@@ -97,8 +98,11 @@ def parse_nvars_from_ideal_dist(ideal_dist: str) -> int:
         _, hi = parse_int_or_range_token(dist_args[1], "n")
         return hi
 
-    if not dist_args:
-        raise ValueError(f"Malformed ideal_dist: {ideal_dist}")
+    if len(dist_args) != 4:
+        raise ValueError(
+            "Malformed binomial ideal_dist. Expected exactly 4 fields: n-d-s-type; "
+            "optional suffixes are not supported."
+        )
     _, hi = parse_int_or_range_token(dist_args[0], "n")
     return hi
 
@@ -111,10 +115,37 @@ def _resolve_pq_budgets(N: int, N_P: Optional[int], N_G: Optional[int]) -> tuple
     return int(n_pair), int(n_basis)
 
 
+def _resolve_observation_nvars(n_vars: int, observation_nvars: Optional[int]) -> int:
+    if observation_nvars is None:
+        return n_vars
+    if not isinstance(observation_nvars, (int, np.integer)) or observation_nvars < n_vars:
+        raise ValueError("observation_nvars must be an integer at least as large as the ideal's variable count.")
+    return int(observation_nvars)
+
+
+def _pad_exponent_matrix(matrix: np.ndarray, n_vars: int, target_n_vars: int, n_monomials: int) -> np.ndarray:
+    """Pad each monomial separately, keeping term and pair endpoint boundaries."""
+    if n_vars == target_n_vars:
+        return matrix
+    monomials = matrix.reshape(matrix.shape[0], n_monomials, n_vars)
+    return np.pad(monomials, ((0, 0), (0, 0), (0, target_n_vars - n_vars))).reshape(
+        matrix.shape[0], n_monomials * target_n_vars
+    )
+
+
 class BuchbergerEnvExponentsv1(gym.Env):
-    def __init__(self, ideal_dist: Optional[str] = "3-20-10-weighted", elimination: str = "gebauermoeller", rewards: str = "additions", pq_strategy: str = 'first', sort_input: bool = False, sort_reducers: bool = True, fix_ideal: bool = False, N: int = 20, k: int = 2, N_P: Optional[int] = None, N_G: Optional[int] = None, coeff_ring: Optional[str] = None, symbols: Optional[str] = None, basis_elements: Optional[Sequence[str]] = None):
+    def __init__(self, ideal_dist: Optional[str] = "3-20-10-weighted", elimination: str = "gebauermoeller", rewards: str = "additions", pq_strategy: str = 'first', sort_input: bool = False, sort_reducers: bool = True, fix_ideal: bool = False, N: int = 20, k: int = 2, N_P: Optional[int] = None, N_G: Optional[int] = None, coeff_ring: Optional[str] = None, symbols: Optional[str] = None, basis_elements: Optional[Sequence[str]] = None, ideal_corpus: Optional[str] = None, observation_nvars: Optional[int] = None):
       super().__init__()
       n_pair, n_basis = _resolve_pq_budgets(N, N_P, N_G)
+      self.ideal_corpus = ideal_corpus
+      corpus = None
+      if ideal_corpus is not None:
+          corpus = load_ideal_corpus(ideal_corpus)
+          validate_corpus_options(corpus, coeff_ring=coeff_ring, symbols=symbols,
+                                  basis_elements=basis_elements, fix_ideal=fix_ideal)
+          coeff_ring, symbols = corpus.coeff_ring, corpus.symbols
+          # Initialize observation buffers at the corpus's largest variable count.
+          basis_elements = [split_ring_symbols(symbols)[0]]
 
       has_fixed_ideal_args = (coeff_ring is not None) or (symbols is not None) or (basis_elements is not None)
       has_all_fixed_ideal_args = (coeff_ring is not None) and (symbols is not None) and (basis_elements is not None)
@@ -139,12 +170,18 @@ class BuchbergerEnvExponentsv1(gym.Env):
               symbols=symbols,
               basis=list(basis_elements),
           )
-          self.n_vars = len([s.strip() for s in symbols.split(",") if s.strip()])
+          self.n_vars = len(split_ring_symbols(symbols))
           if self.n_vars == 0:
               raise ValueError("symbols must contain at least one variable name.")
       else:
           self.env = CGLeadMonomialsEnv(ideal_dist=ideal_dist, elimination=elimination, rewards=rewards, pq_strategy=pq_strategy, sort_input=sort_input, sort_reducers=sort_reducers, fix_ideal=fix_ideal, N=N, k=k, N_P=n_pair, N_G=n_basis)
           self.n_vars = parse_nvars_from_ideal_dist(ideal_dist)
+
+      if corpus is not None:
+          self.env.set_ideal_corpus(corpus.coeff_rings, corpus.ring_symbols, corpus.bases)
+
+      self._native_n_vars = self.n_vars
+      self.n_vars = _resolve_observation_nvars(self.n_vars, observation_nvars)
 
       self.N = N
       self.N_P = n_pair
@@ -183,12 +220,20 @@ class BuchbergerEnvExponentsv1(gym.Env):
     def _build_observation(self, obs_dict: dict) -> dict:
         """Copy native buffers so later steps and resets cannot change this observation."""
         return {
-            "G": np.array(obs_dict["G"], dtype=np.float32, copy=True),
-            "P": np.array(obs_dict["P"], dtype=np.float32, copy=True),
+            "G": _pad_exponent_matrix(np.array(obs_dict["G"], dtype=np.float32, copy=True),
+                                      self._native_n_vars, self.n_vars, self.k),
+            "P": _pad_exponent_matrix(np.array(obs_dict["P"], dtype=np.float32, copy=True),
+                                      self._native_n_vars, self.n_vars, 2 * self.k),
             "G_mask": np.array(obs_dict["G_mask"], dtype=np.bool_, copy=True),
             "P_mask": np.array(obs_dict["P_mask"], dtype=np.bool_, copy=True),
             "state_features": np.array(obs_dict["state_feats"], dtype=np.float32, copy=True),
         }
+
+    def _build_info(self, cenv_info):
+        info = {name: cenv_info[name] for name in ("P_idx_raw", "P_sugar", "P_normal_rank")}
+        if self.ideal_corpus is not None:
+            info["ideal_corpus_index"] = self.env.corpus_index()
+        return info
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
@@ -200,8 +245,7 @@ class BuchbergerEnvExponentsv1(gym.Env):
 
         self.state = self._build_observation(obs_dict)
 
-        info = {name: cenv_info[name] for name in ("P_idx_raw", "P_sugar", "P_normal_rank")}
-        return self.state, info
+        return self.state, self._build_info(cenv_info)
 
     def step(self, action):
 
@@ -213,8 +257,7 @@ class BuchbergerEnvExponentsv1(gym.Env):
         truncated = False
 
         self.state = self._build_observation(obs_dict)
-        info = {name: cenv_info[name] for name in ("P_idx_raw", "P_sugar", "P_normal_rank")}
-        return self.state, reward, bool(terminated), truncated, info
+        return self.state, reward, bool(terminated), truncated, self._build_info(cenv_info)
     
     def value(self, strategy: str = 'degree', gamma: float = 1.0) -> float:
         return self.env.value(strategy=strategy, gamma=gamma)
@@ -233,8 +276,18 @@ class BuchbergerEnvExponentsNoPQv1(gym.Env):
         coeff_ring: Optional[str] = None,
         symbols: Optional[str] = None,
         basis_elements: Optional[Sequence[str]] = None,
+        ideal_corpus: Optional[str] = None,
+        observation_nvars: Optional[int] = None,
     ):
         super().__init__()
+        self.ideal_corpus = ideal_corpus
+        corpus = None
+        if ideal_corpus is not None:
+            corpus = load_ideal_corpus(ideal_corpus)
+            validate_corpus_options(corpus, coeff_ring=coeff_ring, symbols=symbols,
+                                    basis_elements=basis_elements, fix_ideal=fix_ideal)
+            coeff_ring, symbols = corpus.coeff_ring, corpus.symbols
+            basis_elements = [split_ring_symbols(symbols)[0]]
 
         has_fixed_ideal_args = (coeff_ring is not None) or (symbols is not None) or (basis_elements is not None)
         has_all_fixed_ideal_args = (coeff_ring is not None) and (symbols is not None) and (basis_elements is not None)
@@ -256,7 +309,7 @@ class BuchbergerEnvExponentsNoPQv1(gym.Env):
                 basis=list(basis_elements),
                 return_dict=True,
             )
-            self.n_vars = len([s.strip() for s in symbols.split(",") if s.strip()])
+            self.n_vars = len(split_ring_symbols(symbols))
             if self.n_vars == 0:
                 raise ValueError("symbols must contain at least one variable name.")
         else:
@@ -274,6 +327,10 @@ class BuchbergerEnvExponentsNoPQv1(gym.Env):
                 return_dict=True,
             )
             self.n_vars = parse_nvars_from_ideal_dist(ideal_dist)
+        if corpus is not None:
+            self.env.set_ideal_corpus(corpus.coeff_rings, corpus.ring_symbols, corpus.bases)
+        self._native_n_vars = self.n_vars
+        self.n_vars = _resolve_observation_nvars(self.n_vars, observation_nvars)
         self.k = k
         self.g_dim = self.n_vars * self.k
         self.pair_dim = 2 * self.n_vars * self.k
@@ -315,8 +372,10 @@ class BuchbergerEnvExponentsNoPQv1(gym.Env):
         return state
 
     def _build_observation(self, obs_dict: dict) -> dict:
-        P = self._coerce_matrix(obs_dict["P"], self.pair_dim)
-        G = self._coerce_matrix(obs_dict["G"], self.g_dim)
+        P = _pad_exponent_matrix(self._coerce_matrix(obs_dict["P"], 2 * self.k * self._native_n_vars),
+                                 self._native_n_vars, self.n_vars, 2 * self.k)
+        G = _pad_exponent_matrix(self._coerce_matrix(obs_dict["G"], self.k * self._native_n_vars),
+                                 self._native_n_vars, self.n_vars, self.k)
 
         state_features = np.asarray(obs_dict["state_feats"], dtype=np.float32)
         if state_features.shape != (14,):
@@ -332,10 +391,13 @@ class BuchbergerEnvExponentsNoPQv1(gym.Env):
     def _build_info(self, state: dict) -> dict:
         n_pairs = int(state["P"].shape[0])
         n_basis = int(state["G"].shape[0])
-        return {
+        info = {
             "n_pairs": n_pairs,
             "n_basis": n_basis,
         }
+        if self.ideal_corpus is not None:
+            info["ideal_corpus_index"] = self.env.corpus_index()
+        return info
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)

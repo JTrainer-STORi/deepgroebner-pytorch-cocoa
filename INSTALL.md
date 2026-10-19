@@ -1,6 +1,7 @@
 # Installation
 
-This project uses a compiled Cython/C++ extension backed by a system installation of CoCoALib.
+
+In this package, the Buchberger environment is coded in C++ using classes and functions from the CoCoALib library so it is necessary to install CoCoALib prior to installing deepgroebner-pytorch-cocoa
 
 ## 1. Install system dependencies
 
@@ -11,11 +12,10 @@ You need:
 - CoCoALib Version 0.99880: available at https://cocoa.altervista.org/cocoalib/index.shtml
 - Python 3.10+
 
-CoCoALib requires GMP as a separate system dependency. This project has been tested with modern system GMP installs, and CoCoALib's local configure script requires at least GMP `5.1.0`.
 
 Typical GMP installation commands:
 
-Ubuntu / Debian:
+Ubuntu:
 
 ```bash
 sudo apt-get update
@@ -53,7 +53,7 @@ and these library directories:
 - `/usr/local/opt/gmp/lib`
 - `/opt/local/lib`
 
-On a typical Linux machine, the most common "standard" install is:
+On a typical Linux machine, the most common installation location is:
 
 - headers under `/usr/local/include/CoCoA/`
 - library at `/usr/local/lib/libcocoa.a` or `/usr/local/lib/libcocoa.so`
@@ -69,24 +69,11 @@ export COCOA_INCLUDE_DIR=/path/to/include
 export COCOA_LIB_DIR=/path/to/lib
 ```
 
-If you prefer to link against a specific CoCoALib archive or shared object directly, set:
-
-```bash
-export COCOA_INCLUDE_DIR=/path/to/include
-export COCOA_LIBRARY_FILE=/path/to/libcocoa.a
-```
-
 If GMP is installed somewhere non-standard, you can point the build at it explicitly too:
 
 ```bash
 export GMP_INCLUDE_DIR=/path/to/gmp/include
 export GMP_LIB_DIR=/path/to/gmp/lib
-```
-
-Optional override for the library name when using `COCOA_LIB_DIR`:
-
-```bash
-export COCOA_LIBRARY=cocoa
 ```
 
 ## 3. Install the Python package
@@ -99,10 +86,9 @@ Editable install:
 pip install -e .
 ```
 
-Use this if you are developing inside this checkout. The package stays linked to the source tree, so local code edits are picked up without reinstalling.
+Use this if you plan to make edits to some of the python source code and do not want to have to reinstall the library every time you do.
 
-Cython or C++ source changes still require rebuilding the extension by rerunning
-the installation command.
+Cython or C++ source changes still require rebuilding the extension by rerunning the installation command.
 
 Regular install:
 
@@ -110,9 +96,9 @@ Regular install:
 pip install .
 ```
 
-Use this if you just want a normal install of the current checkout into your Python environment. If you later change the source files, you will need to reinstall by running this command again for those changes to take effect.
+Use this if you just want a normal install of the current checkout into your Python environment. If you later change the python source files, you will need to reinstall by running this command again for those changes to take effect.
 
-By defaul the installation will not install the Weights & Biases library, to include it use:
+By default the installation will not install the Weights & Biases library, to include it in the install use:
 
 ```bash
 pip install ".[tracking]"
@@ -121,45 +107,23 @@ pip install ".[tracking]"
 
 ## 4. Quick verification
 
-Install the test dependencies and run the checks from the repository root:
+Run the installed verification command from any directory:
 
 ```bash
-python -m pip install ".[dev]"
-python -m pytest -q
+deepgroebner-pytorch-cocoa-verify
 ```
 
-The tests exercise both native environments, the supported model heads, PPO
-training, and the three scripts. The script integration test generates a corpus,
-trains a small model, and evaluates its checkpoint on both environments.
-See [Testing](docs/testing.md) for focused PPO checks and comparisons against
-CoCoALib's own Groebner basis implementation.
+It imports the package and compiled CoCoALib extension, resets and steps both
+registered environments on a small fixed ideal, and runs the default PyTorch
+actor and critic on CPU for each environment. It requires only the standard
+package dependencies and does not start training or create run artifacts.
+Successful checks print `OK ...` lines followed by
+`Installation verification succeeded.`; a failed check exits with a nonzero status.
+Use `--verbosity quiet` to print only the success message.
 
-## 5. Run the programs
+## 5. Using the library
 
-From the repository root, use the same Python environment where you installed
-the package:
-
-```bash
-python run_training.py --help
-python generate_corpus.py --help
-python evaluate_model.py --help
-```
-
-Use these three scripts directly for training, corpus generation, and evaluation.
-See the
-[training tutorial](docs/tutorials/training-runs.md) and
-[corpus and evaluation tutorial](docs/tutorials/eval-corpora-and-greedy-eval.md)
-for examples.
-
-The Laman graph tables in
-`src/deepgroebner_pytorch_cocoa/data/LamanGraphs3-10/` are included in the installed
-package. Geometric distributions do not require a separate data download or a
-particular working directory.
-
-For notebooks or other Python projects, install into that project's Python
-environment and import the package modules directly. The corpus and evaluation
-tutorial includes examples using `corpus_generation.generate_corpus` with a
-`CorpusConfig` and `model_evaluation.evaluate` with an `EvalCorpusConfig`.
+Once the installation is complete, you are ready to start using the package. Look at the [readme](README.md)
 
 ## Troubleshooting
 

@@ -18,12 +18,15 @@ try:
 except ImportError:
     wandb = None
 from .config_dataclasses import Config
+from .evaluation_corpus import load_explicit_greedy_eval_corpus
+from .ideal_corpus import load_ideal_corpus, split_ring_symbols, validate_corpus_options
 from .local_logging import make_summary_writer
+from .system_metrics import WandbSystemMetricsAdapter
 
 _VERBOSITY_LEVELS = {"quiet": 0, "normal": 1, "verbose": 2}
 
 _SYSTEM_METRIC_TAGS = {
-    "elapsed_seconds": "performance/elapsed_seconds",
+    "elapsed_seconds": "system_general/elapsed_seconds",
     "process_cpu_user_seconds": "system_cpu/process_user_seconds",
     "process_cpu_system_seconds": "system_cpu/process_system_seconds",
     "process_cpu_total_seconds": "system_cpu/process_total_seconds",
@@ -45,6 +48,12 @@ def resolve_training_config(cfg: Config) -> Config:
 
     cfg = deepcopy(cfg)
 
+    if (
+        cfg.training.greedy_eval_first_step is not None
+        and cfg.training.greedy_eval_first_step < 0
+    ):
+        raise ValueError("training.greedy_eval_first_step must be nonnegative or None.")
+
     for name in (
         "num_envs",
         "num_steps_per_update",
@@ -65,11 +74,41 @@ def resolve_training_config(cfg: Config) -> Config:
             "training.num_minibatches cannot exceed the rollout batch size."
         )
     
-    if all(value is not None for value in (cfg.env.coeff_ring, cfg.env.symbols, cfg.env.basis_elements)):
+    if cfg.env.ideal_corpus is not None:
+        corpus = load_ideal_corpus(cfg.env.ideal_corpus)
+        validate_corpus_options(
+            corpus,
+            coeff_ring=cfg.env.coeff_ring,
+            symbols=cfg.env.symbols,
+            basis_elements=cfg.env.basis_elements,
+            fix_ideal=cfg.env.fix_ideal,
+        )
+        cfg.env.ideal_corpus = str(Path(cfg.env.ideal_corpus).resolve())
+        cfg.env.coeff_ring = corpus.coeff_ring
+        cfg.env.symbols = corpus.symbols
+        cfg.env.ideal_dist = None
+    elif all(value is not None for value in (cfg.env.coeff_ring, cfg.env.symbols, cfg.env.basis_elements)):
         if isinstance(cfg.env.basis_elements, str):
             cfg.env.basis_elements = cfg.env.basis_elements.split(",")
         cfg.env.fix_ideal = True
         cfg.env.ideal_dist = None
+    if cfg.training.greedy_eval_corpus is not None:
+        cfg.training.greedy_eval_corpus = str(
+            Path(cfg.training.greedy_eval_corpus).expanduser().resolve()
+        )
+        evaluation_enabled = (
+            cfg.training.greedy_eval_interval_steps > 0
+            and cfg.training.greedy_eval_num_examples > 0
+            and (
+                cfg.training.greedy_eval_on_train_env
+                or (
+                    cfg.training.greedy_eval_on_nopq_env
+                    and cfg.env.gym_id.lower() != "buchbergerexponentsnopq-v1"
+                )
+            )
+        )
+        if evaluation_enabled:
+            load_explicit_greedy_eval_corpus(cfg)
     return cfg
 
 
@@ -90,7 +129,11 @@ def create_run_writer(cfg: Config):
     # Check if the user has specified a fixed ideal or will be using a distribution
     fixed_ideal = all(value is not None for value in (cfg.env.coeff_ring, cfg.env.symbols, cfg.env.basis_elements))
 
-    distribution = "fixed-ideal" if fixed_ideal else cfg.env.ideal_dist
+    distribution = (
+        f"corpus-{Path(cfg.env.ideal_corpus).stem}"
+        if cfg.env.ideal_corpus is not None
+        else "fixed-ideal" if fixed_ideal else cfg.env.ideal_dist
+    )
 
     run_name = f"{cfg.env.gym_id}__{distribution}__{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}__{wandb_id}"
 
@@ -105,6 +148,13 @@ def create_run_writer(cfg: Config):
             cfg.env.basis_elements,
         )
 
+    if cfg.env.ideal_corpus is not None:
+        console_print(
+            cfg,
+            f"Training from ideal corpus {cfg.env.ideal_corpus}; "
+            f"policy variable count: {len(split_ring_symbols(cfg.env.symbols))}",
+        )
+
 
     if cfg.training.track:
         init_wandb_run(cfg, run_name, wandb_id)
@@ -112,7 +162,13 @@ def create_run_writer(cfg: Config):
     log_dir = get_training_output_directory(cfg) / "runs"
 
     writer = make_summary_writer(
-        str(log_dir / run_name), mirror_to_wandb=cfg.training.track, wandb_module=wandb
+        str(log_dir / run_name),
+        mirror_to_wandb=cfg.training.track,
+        wandb_module=wandb,
+        system_metrics_adapter=(
+            WandbSystemMetricsAdapter(wandb.run) if cfg.training.track else None
+        ),
+        system_metrics_interval_seconds=cfg.training.system_metrics_interval_seconds,
     )
 
     print(f"Local run logs: {writer.log_dir}")
@@ -213,19 +269,25 @@ def print_update_summary(
 
 
 def log_system_metrics(writer, record: dict[str, object], global_step: int):
-    """Route hardware, throughput, and environment samples to their sections.
+    """Route hardware, queue, and rollout samples to their sections.
 
     Raw timestamps and byte counts stay in system_metrics.jsonl; scalar plots
     use elapsed time and GiB to avoid duplicate curves for the same quantity.
     """
     for key, value in record.items():
-        tag = (
-            f"evaluation_training/{key}"
-            if key.startswith("rollout_")
-            else _SYSTEM_METRIC_TAGS.get(key)
-        )
-        if tag is None:
+        if key.startswith(("rollout_pair_", "rollout_pairs_", "rollout_pq_")):
+            tag = f"priority_queue/{key}"
+        elif key.startswith("rollout_"):
+            tag = f"training_rollouts/{key}"
+        elif key in _SYSTEM_METRIC_TAGS:
+            tag = _SYSTEM_METRIC_TAGS[key]
+        elif key in {
+            "timestamp_utc", "timestamp_unix_seconds", "global_step", "policy_updates"
+        } or key.endswith("_bytes"):
+            # Keep raw metadata and duplicate byte units in the JSONL sample.
             continue
+        else:
+            tag = f"system_general/{key}"
         if isinstance(value, bool):
             writer.add_scalar(tag, 1.0 if value else 0.0, global_step)
         elif isinstance(value, (int, float)) and np.isfinite(value):
@@ -305,7 +367,11 @@ def init_wandb_run(cfg: Config, run_name: str, wandb_id: str):
         name=run_name,
         monitor_gym=True,
         save_code=True,
-        settings=wandb.Settings(init_timeout=cfg.training.wandb_init_timeout),
+        settings=wandb.Settings(
+            init_timeout=cfg.training.wandb_init_timeout,
+            # W&B 0.17 uses this name; newer SDKs accept it as an x_* alias.
+            _stats_buffer_size=1,
+        ),
     )
     if (
         cfg.training.output_directory is not None

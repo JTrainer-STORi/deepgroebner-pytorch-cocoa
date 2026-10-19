@@ -136,13 +136,14 @@ class EnvConfig:
   """Configuration options for the Buchberger Environment."""
   gym_id: str = "BuchbergerExponents-v1" # The id of the Gym environment to use, should be registered in deepgroebner_pytorch_cocoa/envs/__init__.py
   ideal_dist: Optional[str] = "3-20-10-weighted" # The distribution to sample ideals from.
+  ideal_corpus: Optional[str] = None # Optional JSONL training file; ideals may use different rings. Policy inputs use the largest variable count, with zero padding for smaller rings. Samples uniformly at reset and overrides ideal_dist; incompatible with basis_elements and fix_ideal=True.
   env_seed: int = 12 # The seed for the environment's random number generator, which controls the sampling of ideals and other stochastic aspects of the environment. Setting this to a fixed value can help ensure reproducibility across runs.
   elimination: Literal["gebauermoeller", "lcm", "none"] = "gebauermoeller" # The elimination strategy to use in the environment.
   rewards: Literal["additions", "reductions"] = "additions" # Whether to use a reward signal based on the number of additions or reductions.
-  priority_queue_strategy: Literal["first", "last", "random", "degree", "normal", "sugar"] = "degree" # The strategy to use for ordering the priority queue which determines which N pairs are included in the agent's observation.
+  priority_queue_strategy: Literal["first", "random", "degree", "normal", "sugar"] = "degree" # The strategy to use for ordering the priority queue which determines which N pairs are included in the agent's observation.
   sort_input: tyro.conf.FlagConversionOff[bool] = False # Whether to sort the input polynomials to Buchberger's algorithm by leading monomial
   sort_reducers: tyro.conf.FlagConversionOff[bool] = True # Whether to sort the reducers in the reduction step of Buchberger's algorithm by leading monomial
-  fix_ideal: tyro.conf.FlagConversionOff[bool] = False # Whether to fix the ideal across episodes, useful for evaluation
+  fix_ideal: tyro.conf.FlagConversionOff[bool] = False # Sample one ideal with env_seed and reuse it across training episodes, workers, and greedy evaluation.
   N: int = 100 # Default observation budget for both visible pairs/actions and visible basis elements, unless N_P or N_G is set.
   N_P: Optional[int] = None # Optional override for the number of visible S-pairs/actions. If None, uses N.
   N_G: Optional[int] = None # Optional override for the number of visible basis elements. If None, uses N.
@@ -201,19 +202,15 @@ class TrainingConfig:
   save_critic: tyro.conf.FlagConversionOff[bool] = False # Whether to save the critic model after training
   max_runtime_seconds: Optional[int] = None # Optional wall-clock budget for a single training run; training stops early when exceeded.
   hparam_metrics_out: Optional[str] = None # Optional JSON path where final training metrics are written for hyperparameter tuning.
-  hparam_eval_interval_steps: int = 250_000 # Run fixed-seed greedy evaluation every this many environment steps. Set <= 0 to disable.
-  hparam_eval_num_examples: int = 100 # Number of fixed evaluation episodes used for the greedy hyperparameter metric. Set <= 0 to disable.
-  hparam_eval_seed: int = 10_000 # Base seed for fixed evaluation examples; episode i uses seed hparam_eval_seed + i.
-  hparam_eval_on_train_env: tyro.conf.FlagConversionOff[bool] = True # Whether to run fixed greedy evaluation on the main training env. When explicitly set, this works independently from NoPQ evaluation.
-  hparam_eval_on_nopq_env: tyro.conf.FlagConversionOff[bool] = False # Whether to run fixed greedy evaluation on the configured NoPQ env. When explicitly set, this works independently from main-env evaluation.
-  hparam_eval_nopq_gym_id: str = "BuchbergerExponentsNoPQ-v1" # Gym id used when evaluating on the NoPQ environment.
-  hparam_eval_progress_interval_seconds: float = 30.0 # Seconds between progress messages while greedy evaluation is running. Set <= 0 to disable.
-  hparam_eval_max_pairs_processed_multiplier: Optional[float] = None # Legacy no-op. Retained only for backwards-compatible CLI/config loading; greedy eval no longer truncates on processed-pair budgets.
-  hparam_eval_max_pairs_processed_slack: int = 0 # Legacy no-op paired with hparam_eval_max_pairs_processed_multiplier.
-  hparam_eval_nopq_benchmark_pairs_processed_multiplier: Optional[float] = 5.0 # Legacy no-op. Retained only for backwards-compatible CLI/config loading; greedy eval no longer truncates NoPQ episodes using benchmark-derived processed-pair caps.
-  hparam_eval_nopq_benchmark_pairs_processed_slack: int = 50 # Legacy no-op paired with hparam_eval_nopq_benchmark_pairs_processed_multiplier.
-  hparam_eval_max_steps_since_basis_update: Optional[int] = None # Legacy no-op. Retained only for backwards-compatible CLI/config loading; greedy eval no longer truncates on basis-update stagnation.
-  hparam_eval_max_episode_seconds: Optional[float] = None # Optional wall-clock timeout per greedy-eval episode. Uses a subprocess watchdog so a hung native step can be terminated.
+  greedy_eval_first_step: Optional[int] = None # Environment timestep of the first greedy evaluation. None uses greedy_eval_interval_steps; 0 evaluates before training. Later rounds follow the interval from this first step, at PPO update boundaries.
+  greedy_eval_interval_steps: int = 0 # Environment steps between scheduled greedy evaluations after the first. Set <= 0 to disable greedy evaluation.
+  greedy_eval_num_examples: int = 100 # Number of automatically selected evaluation ideals. An explicit corpus uses every row; setting <= 0 disables greedy evaluation.
+  greedy_eval_corpus: Optional[str] = None # Optional path to a pre-generated JSONL evaluation corpus. None automatically generates or reuses a cached corpus; an explicit file is used in full.
+  greedy_eval_seed: int = 10_000 # Seed for evaluation episodes and corpus selection. With fix_ideal=True, env.env_seed selects the shared training/evaluation ideal.
+  greedy_eval_on_train_env: tyro.conf.FlagConversionOff[bool] = True # Whether to run fixed greedy evaluation on the main training env. When explicitly set, this works independently from NoPQ evaluation.
+  greedy_eval_on_nopq_env: tyro.conf.FlagConversionOff[bool] = False # Whether to run fixed greedy evaluation on BuchbergerExponentsNoPQ-v1. When explicitly set, this works independently from main-env evaluation.
+  greedy_eval_progress_interval_seconds: float = 30.0 # Seconds between progress messages while greedy evaluation is running. Set <= 0 to disable.
+  greedy_eval_max_episode_seconds: Optional[float] = None # Optional wall-clock timeout per greedy-eval episode. Uses a subprocess watchdog so a hung native step can be terminated.
   total_timesteps: int = 1_000_000 # The total number of timesteps to train the agent for.
   num_envs: int = 12 # The number of parallel environments to use during training. 
   num_steps_per_update: int = 1024 # The number of steps to run in each environment before performing an update to the model. This is often referred to as the "rollout length" or "horizon".
@@ -223,6 +220,7 @@ class TrainingConfig:
   gae_lambda: float = 0.95 # The lambda parameter for Generalized Advantage Estimation (GAE). 
   vectorization_mode: Literal["sync", "async"] = "async" # The mode to use for vectorizing the environments during training. "sync" runs multiple environment copies in the same process, "async" runs each environment copy in a seperate process which can lead to big speedups when many CPU cores are available.
   counterfactual_diagnostic_frequency: int = 0 # How often (in terms of number of updates) to run the counterfactual diagnostic function during training. Set this to 0 to disable the counterfactual diagnostic.
+  attention_diagnostic_frequency: int = 0 # PPO updates between attention diagnostics for the AlphaStar pair transformer, independently of counterfactual diagnostics and state heads. Set <= 0 to disable.
   gradient_sensitivity_diagnostic_frequency: int = 0 # How often (in terms of number of updates) to run the gradient sensitivity diagnostic function during training. Set this to 0 to disable the gradient sensitivity diagnostic.
   ranking_diagnostic_frequency: int = 0 # How often (in terms of number of updates) to run policy-vs-heuristic ranking diagnostics. Set this to 0 to disable.
 

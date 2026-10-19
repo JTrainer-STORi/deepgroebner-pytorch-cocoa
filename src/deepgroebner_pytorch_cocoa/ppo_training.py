@@ -288,30 +288,30 @@ class PPOTrainer:
                         self.min_episodic_return, episodic_return
                     )
                     self.writer.add_scalar(
-                        "evaluation_training/episodic_return", episodic_return, self.global_step
+                        "training_rollouts/episodic_return", episodic_return, self.global_step
                     )
                     self.writer.add_scalar(
-                        "evaluation_training/max_episodic_return",
+                        "training_rollouts/max_episodic_return",
                         self.max_episodic_return,
                         self.global_step,
                     )
                     self.writer.add_scalar(
-                        "evaluation_training/min_episodic_return",
+                        "training_rollouts/min_episodic_return",
                         self.min_episodic_return,
                         self.global_step,
                     )
                     self.writer.add_scalar(
-                        "evaluation_training/episodic_return_last_100_avg",
+                        "training_rollouts/episodic_return_last_100_avg",
                         self.last_k_avg_return,
                         self.global_step,
                     )
                     self.writer.add_scalar(
-                        "evaluation_training/episodic_length",
+                        "training_rollouts/episodic_length",
                         infos["episode"]["l"][i].item(),
                         self.global_step,
                     )
                     self.writer.add_scalar(
-                        "evaluation_training/episodes_completed",
+                        "training_rollouts/episodes_completed",
                         self.episode_counter,
                         self.global_step,
                     )
@@ -336,34 +336,41 @@ class PPOTrainer:
     def _run_diagnostics(self, batch, indices):
         cfg = self.cfg
         diagnostics_input = batch.model_inputs(indices)
+        update_idx = self.policy_updates + 1
         return_attention = (
             cfg.actor.pair_embedding_head == "alphastar-buchberger-pair-transformer"
         )
-
-        if (
+        has_global_state = (
             cfg.actor.state_embedding_head is not None
             or cfg.actor.state_features_embedding_head is not None
-        ):
+        )
+
+        if has_global_state or return_attention:
             run_actor_global_diagnostics(
                 actor=self.agent.actor,
                 input=diagnostics_input,
                 writer=self.writer,
-                update_idx=self.policy_updates,
+                update_idx=update_idx,
                 global_step=self.global_step,
-                diag_every=cfg.training.counterfactual_diagnostic_frequency,
-                grad_every=cfg.training.gradient_sensitivity_diagnostic_frequency,
+                diag_every=(
+                    cfg.training.counterfactual_diagnostic_frequency if has_global_state else 0
+                ),
+                grad_every=(
+                    cfg.training.gradient_sensitivity_diagnostic_frequency if has_global_state else 0
+                ),
                 return_attention=return_attention,
+                attention_every=cfg.training.attention_diagnostic_frequency,
             )
 
             self.agent.actor.zero_grad(set_to_none=True)
 
         ranking_every = cfg.training.ranking_diagnostic_frequency
-        if ranking_every > 0 and self.policy_updates % ranking_every == 0:
+        if ranking_every > 0 and update_idx % ranking_every == 0:
             run_actor_ranking_diagnostics(
                 actor=self.agent.actor,
                 input=diagnostics_input,
                 writer=self.writer,
-                update_idx=self.policy_updates,
+                update_idx=update_idx,
                 global_step=self.global_step,
                 ranking_every=ranking_every,
                 **batch.ranking_metadata(indices),
@@ -373,36 +380,39 @@ class PPOTrainer:
         cfg = self.cfg
         self.policy_updates += 1
         scalars = {
-            "algorithm_general/learning_rate": self.optimizer.param_groups[0]["lr"],
             "algorithm_general/policy_updates": self.policy_updates,
         }
+        if cfg.training.anneal_learning_rate:
+            scalars["algorithm_general/learning_rate"] = self.optimizer.param_groups[0][
+                "lr"
+            ]
         if cfg.critic.critic_strategy != "heuristic-only":
             scalars.update(
                 {
-                    "algorithm_value/loss": metrics.value_loss,
-                    "algorithm_value/weighted_loss": cfg.training.critic_loss_coefficient
+                    "value_function/loss": metrics.value_loss,
+                    "value_function/weighted_loss": cfg.training.critic_loss_coefficient
                     * metrics.value_loss,
-                    "algorithm_value/clip_fraction": np.mean(metrics.value_clipfracs),
-                    "algorithm_value/grad_norm_before_clip": metrics.critic_grad_norm,
+                    "value_function/clip_fraction": np.mean(metrics.value_clipfracs),
+                    "value_function/grad_norm_before_clip": metrics.critic_grad_norm,
                 }
             )
         scalars.update(
             {
-                "algorithm_value/explained_variance": metrics.explained_variance,
-                "algorithm_policy/loss": metrics.policy_loss,
-                "algorithm_policy/entropy_raw": metrics.entropy_raw,
-                "algorithm_policy/entropy_normalized": metrics.entropy_normalized,
-                "algorithm_policy/entropy_bonus": metrics.entropy_bonus,
-                "algorithm_policy/weighted_entropy_bonus": cfg.training.entropy_coefficient
+                "value_function/explained_variance": metrics.explained_variance,
+                "policy_function/loss": metrics.policy_loss,
+                "policy_function/entropy_raw": metrics.entropy_raw,
+                "policy_function/entropy_normalized": metrics.entropy_normalized,
+                "policy_function/entropy_bonus": metrics.entropy_bonus,
+                "policy_function/weighted_entropy_bonus": cfg.training.entropy_coefficient
                 * metrics.entropy_bonus,
-                "algorithm_policy/old_approx_kl": metrics.old_approx_kl,
-                "algorithm_policy/approx_kl": metrics.approx_kl,
-                "algorithm_general/advantage_mean": (
+                "policy_function/old_approx_kl": metrics.old_approx_kl,
+                "policy_function/approx_kl": metrics.approx_kl,
+                "value_function/advantage_mean": (
                     sum(metrics.advantage_means) / len(metrics.advantage_means)
                     if metrics.advantage_means
                     else float("nan")
                 ),
-                "algorithm_general/advantage_std": (
+                "value_function/advantage_std": (
                     (
                         sum(s**2 for s in metrics.advantage_stds)
                         / len(metrics.advantage_stds)
@@ -411,8 +421,8 @@ class PPOTrainer:
                     if metrics.advantage_stds
                     else float("nan")
                 ),
-                "algorithm_policy/grad_norm_before_clip": metrics.actor_grad_norm,
-                "algorithm_policy/clip_fraction": np.mean(metrics.clipfracs),
+                "policy_function/grad_norm_before_clip": metrics.actor_grad_norm,
+                "policy_function/clip_fraction": np.mean(metrics.clipfracs),
             }
         )
         if self.obs_sf_normalizer is not None:
@@ -422,16 +432,16 @@ class PPOTrainer:
             )
             scalars.update(
                 {
-                    "algorithm_general/state_features_running_mean": tensor_stat_to_float(
+                    "policy_function/state_features_running_mean": tensor_stat_to_float(
                         self.obs_sf_normalizer.mean
                     ),
-                    "algorithm_general/state_features_running_std": tensor_stat_to_float(
+                    "policy_function/state_features_running_std": tensor_stat_to_float(
                         std
                     ),
-                    "algorithm_general/state_features_running_std_max": std.detach()
+                    "policy_function/state_features_running_std_max": std.detach()
                     .max()
                     .item(),
-                    "algorithm_general/state_features_running_std_min": std.detach()
+                    "policy_function/state_features_running_std_min": std.detach()
                     .min()
                     .item(),
                 }
@@ -457,10 +467,10 @@ class PPOTrainer:
             )
             scalars.update(
                 {
-                    "algorithm_value/running_target_mean": tensor_stat_to_float(
+                    "value_function/running_target_mean": tensor_stat_to_float(
                         self.value_normalizer.mean
                     ),
-                    "algorithm_value/running_target_std": tensor_stat_to_float(
+                    "value_function/running_target_std": tensor_stat_to_float(
                         std
                     ),
                 }
@@ -490,11 +500,27 @@ class PPOTrainer:
             ),
         )
 
+    def _evaluate_if_due(self):
+        if (
+            self.evaluation.enabled
+            and self.evaluation.next_step is not None
+            and self.global_step >= self.evaluation.next_step
+        ):
+            self.evaluation.evaluate(
+                agent=self.agent,
+                writer=self.writer,
+                global_step=self.global_step,
+                run_name=self.run_name,
+                device=self.device,
+                obs_sf_normalizer=self.obs_sf_normalizer,
+            )
+
     def run(self) -> TrainingResult:
         """Train, save final artifacts, and close resources on success or failure."""
         cfg = self.cfg
         with ExitStack() as resources:
             self._setup(resources)
+            self._evaluate_if_due()
             for update in range(1, self.num_updates + 1):
                 if cfg.training.max_runtime_seconds is not None:
                     elapsed = time.time() - self.start_time
@@ -518,19 +544,7 @@ class PPOTrainer:
                 )
                 self._run_diagnostics(batch, metrics.last_indices)
                 self._log_update(metrics, batch, update)
-                if (
-                    self.evaluation.enabled
-                    and self.evaluation.next_step is not None
-                    and self.global_step >= self.evaluation.next_step
-                ):
-                    self.evaluation.evaluate(
-                        agent=self.agent,
-                        writer=self.writer,
-                        global_step=self.global_step,
-                        run_name=self.run_name,
-                        device=self.device,
-                        obs_sf_normalizer=self.obs_sf_normalizer,
-                    )
+                self._evaluate_if_due()
             checkpoint_paths = save_model_checkpoints(cfg, self.agent, self.run_name)
             for kind, path in sorted(checkpoint_paths.items()):
                 print(f"Final {kind} checkpoint saved to {path}")

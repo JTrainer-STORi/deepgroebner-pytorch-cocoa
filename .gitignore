@@ -8,6 +8,7 @@ build/
 runs/
 models/
 eval_corpora/
+test_corpora/
 eval_results/
 src/deepgroebner_pytorch_cocoa/wrapped.cpp
 src/deepgroebner_pytorch_cocoa/wrapped.cpython-312-x86_64-linux-gnu.so

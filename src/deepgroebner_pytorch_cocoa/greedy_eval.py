@@ -21,6 +21,8 @@ from .buchberger_env import (
     split_top_level_dash,
 )
 from .combined_networks import CombinedPolicyNetwork
+from .evaluation_corpus import load_explicit_greedy_eval_corpus
+from .ideal_corpus import load_ideal_corpus
 from .model_input_utils import build_model_inputs_from_single_obs
 from .package_resources import laman_graph_path
 from .ppo_normalization import (
@@ -32,6 +34,8 @@ from .training_env import build_fixed_ideal_env_kwargs_for_gym_id
 from .training_utils import console_print, format_optional_metric
 from .wrapped import CGLeadMonomialsEnv
 
+_NOPQ_GYM_ID = "BuchbergerExponentsNoPQ-v1"
+
 STATE_FEATURE_P_CARDINALITY_IDX = 1
 STATE_FEATURE_N_PAIRS_PROCESSED_IDX = 12
 STATE_FEATURE_STEPS_SINCE_BASIS_UPDATE_IDX = 13
@@ -41,80 +45,6 @@ EVAL_TIMEOUT_PROGRESS_HISTORY_MAXLEN = 32
 EVAL_TIMEOUT_MIN_PROGRESS_SAMPLES = 8
 EVAL_TIMEOUT_RECENT_ACTIVITY_SECONDS = 10.0
 EVAL_TIMEOUT_MIN_PAIR_CARDINALITY_DROP = 2
-
-
-def _build_greedy_eval_episode_limits(
-    obs: dict,
-    cfg,
-    *,
-    benchmark_episode_result: dict | None = None,
-) -> dict[str, int | None]:
-    state_features = np.asarray(obs["state_features"], dtype=np.float32).reshape(-1)
-    initial_pair_count = max(
-        0, int(round(float(state_features[STATE_FEATURE_P_CARDINALITY_IDX])))
-    )
-
-    max_pairs_processed = None
-    pairs_multiplier = getattr(
-        cfg.training, "hparam_eval_max_pairs_processed_multiplier", None
-    )
-    if pairs_multiplier is not None:
-        pairs_multiplier = float(pairs_multiplier)
-        if pairs_multiplier > 0:
-            slack = int(
-                getattr(cfg.training, "hparam_eval_max_pairs_processed_slack", 0) or 0
-            )
-            max_pairs_processed = int(
-                np.ceil((pairs_multiplier * max(1, initial_pair_count)) + slack)
-            )
-
-    benchmark_pairs_processed_limit = None
-    if benchmark_episode_result is not None:
-        benchmark_multiplier = getattr(
-            cfg.training,
-            "hparam_eval_nopq_benchmark_pairs_processed_multiplier",
-            None,
-        )
-        if benchmark_multiplier is not None:
-            benchmark_multiplier = float(benchmark_multiplier)
-            if benchmark_multiplier > 0:
-                benchmark_slack = int(
-                    getattr(
-                        cfg.training,
-                        "hparam_eval_nopq_benchmark_pairs_processed_slack",
-                        0,
-                    )
-                    or 0
-                )
-                benchmark_length = max(
-                    1, int(benchmark_episode_result.get("length", 0))
-                )
-                benchmark_pairs_processed_limit = int(
-                    np.ceil((benchmark_multiplier * benchmark_length) + benchmark_slack)
-                )
-                if max_pairs_processed is None:
-                    max_pairs_processed = benchmark_pairs_processed_limit
-                else:
-                    max_pairs_processed = min(
-                        max_pairs_processed, benchmark_pairs_processed_limit
-                    )
-
-    max_steps_since_basis_update = getattr(
-        cfg.training,
-        "hparam_eval_max_steps_since_basis_update",
-        None,
-    )
-    if max_steps_since_basis_update is not None:
-        max_steps_since_basis_update = int(max_steps_since_basis_update)
-        if max_steps_since_basis_update <= 0:
-            max_steps_since_basis_update = None
-
-    return {
-        "initial_pair_count": initial_pair_count,
-        "max_pairs_processed": max_pairs_processed,
-        "benchmark_pairs_processed_limit": benchmark_pairs_processed_limit,
-        "max_steps_since_basis_update": max_steps_since_basis_update,
-    }
 
 
 def _greedy_eval_episode_progress_state(
@@ -573,9 +503,9 @@ def run_fixed_greedy_eval(
     episode_results = []
     eval_start_time = time.monotonic()
     progress_interval = float(
-        getattr(cfg.training, "hparam_eval_progress_interval_seconds", 0.0) or 0.0
+        getattr(cfg.training, "greedy_eval_progress_interval_seconds", 0.0) or 0.0
     )
-    timeout_seconds = getattr(cfg.training, "hparam_eval_max_episode_seconds", None)
+    timeout_seconds = getattr(cfg.training, "greedy_eval_max_episode_seconds", None)
     if timeout_seconds is not None:
         timeout_seconds = float(timeout_seconds)
         if timeout_seconds <= 0:
@@ -799,7 +729,7 @@ def collect_unique_ideal_eval_seeds(
     seeds: list[int] = []
     max_attempts = max(target_count * 20, target_count + 1_000)
     if base_seed is None:
-        base_seed = int(cfg.training.hparam_eval_seed)
+        base_seed = int(cfg.training.greedy_eval_seed)
 
     for attempt in range(max_attempts):
         seed = int(base_seed) + attempt
@@ -830,9 +760,16 @@ def build_greedy_eval_seeds(cfg, greedy_eval_enabled: bool) -> list[int]:
     if not greedy_eval_enabled:
         return []
 
-    num_examples = int(cfg.training.hparam_eval_num_examples)
+    num_examples = int(cfg.training.greedy_eval_num_examples)
     if num_examples <= 0:
         return []
+
+    if getattr(cfg.training, "greedy_eval_corpus", None) is not None:
+        return [row["episode_seed"] for row in load_explicit_greedy_eval_corpus(cfg)]
+
+    if cfg.env.ideal_corpus is not None:
+        num_examples = min(num_examples, len(load_ideal_corpus(cfg.env.ideal_corpus).bases))
+        return [cfg.training.greedy_eval_seed + i for i in range(num_examples)]
 
     fixed_ideal_eval = (
         bool(cfg.env.fix_ideal)
@@ -863,10 +800,10 @@ def build_greedy_eval_seeds(cfg, greedy_eval_enabled: bool) -> list[int]:
         return collect_unique_ideal_eval_seeds(
             cfg,
             target_count,
-            base_seed=int(cfg.training.hparam_eval_seed),
+            base_seed=int(cfg.training.greedy_eval_seed),
         )
 
-    return [cfg.training.hparam_eval_seed + i for i in range(num_examples)]
+    return [cfg.training.greedy_eval_seed + i for i in range(num_examples)]
 
 
 def _split_symbols(symbols: str) -> list[str]:
@@ -936,6 +873,29 @@ def build_greedy_eval_corpus(cfg, eval_seeds: list[int]) -> list[dict]:
     if not eval_seeds:
         return []
 
+    if getattr(cfg.training, "greedy_eval_corpus", None) is not None:
+        return load_explicit_greedy_eval_corpus(cfg)
+
+    if cfg.env.ideal_corpus is not None:
+        corpus = load_ideal_corpus(cfg.env.ideal_corpus)
+        if len(eval_seeds) > len(corpus.bases):
+            raise ValueError("Greedy evaluation cannot select more ideals than the training corpus.")
+        indices = np.random.default_rng(cfg.training.greedy_eval_seed).choice(
+            len(corpus.bases), size=len(eval_seeds), replace=False
+        )
+        return [
+            {
+                "ideal_id": ideal_id,
+                "episode_seed": int(seed),
+                "distribution": "ideal_corpus",
+                "ideal_corpus_index": int(index),
+                "coeff_ring": corpus.coeff_rings[int(index)],
+                "symbols": corpus.ring_symbols[int(index)],
+                "basis_elements": list(corpus.bases[int(index)]),
+            }
+            for ideal_id, (index, seed) in enumerate(zip(indices, eval_seeds))
+        ]
+
     env = CGLeadMonomialsEnv(
         ideal_dist=cfg.env.ideal_dist,
         elimination=cfg.env.elimination,
@@ -953,23 +913,31 @@ def build_greedy_eval_corpus(cfg, eval_seeds: list[int]) -> list[dict]:
         basis=cfg.env.basis_elements,
     )
 
+    generated_fixed_ideal = bool(cfg.env.fix_ideal) and cfg.env.basis_elements is None
     corpus_rows = []
-    default_coeff_ring = cfg.env.coeff_ring if cfg.env.coeff_ring is not None else "QQ"
     for ideal_id, seed in enumerate(eval_seeds):
-        env.seed(seed)
+        # Fixed training workers all sample with env_seed. Evaluation seeds still
+        # control episode randomness, but must not select a different ideal.
+        env.seed(cfg.env.env_seed if generated_fixed_ideal else seed)
         _, info = env.reset()
         basis_elements = list(info.get("basis_elements", []))
         if len(basis_elements) == 0:
             raise ValueError(
                 f"Greedy eval corpus row {ideal_id} had no basis_elements for seed {seed}."
             )
-        symbols = _resolve_symbols_for_eval_corpus(cfg, basis_elements)
+        initial_ideal = env.initial_ideal()
+        coeff_ring = initial_ideal["coeff_ring"]
+        if generated_fixed_ideal:
+            symbols = initial_ideal["symbols"]
+            basis_elements = initial_ideal["basis_elements"]
+        else:
+            symbols = _resolve_symbols_for_eval_corpus(cfg, basis_elements)
         corpus_rows.append(
             {
                 "ideal_id": ideal_id,
                 "episode_seed": int(seed),
                 "distribution": cfg.env.ideal_dist,
-                "coeff_ring": default_coeff_ring,
+                "coeff_ring": coeff_ring,
                 "symbols": symbols,
                 "basis_elements": basis_elements,
             }
@@ -992,21 +960,31 @@ def _greedy_eval_corpus_cache_root(
 
 def _greedy_eval_corpus_cache_key(cfg, eval_seeds: list[int]) -> str:
     descriptor = {
+        "corpus_format_version": 2,
         "ideal_dist": cfg.env.ideal_dist,
-        "base_seed": int(cfg.training.hparam_eval_seed),
+        "base_seed": int(cfg.training.greedy_eval_seed),
         "eval_seeds": [int(seed) for seed in eval_seeds],
         "fix_ideal": bool(cfg.env.fix_ideal),
         "basis_elements": cfg.env.basis_elements,
     }
+    if cfg.env.ideal_corpus is not None:
+        descriptor["ideal_corpus"] = load_ideal_corpus(cfg.env.ideal_corpus).rows()
+    if cfg.env.basis_elements is not None:
+        descriptor["coeff_ring"] = cfg.env.coeff_ring
+        descriptor["symbols"] = cfg.env.symbols
+    elif cfg.env.fix_ideal:
+        descriptor["fixed_ideal_env_seed"] = int(cfg.env.env_seed)
     descriptor_json = json.dumps(descriptor, sort_keys=True)
     digest = hashlib.sha1(descriptor_json.encode("utf-8")).hexdigest()[:12]
     ideal_label = (
-        cfg.env.ideal_dist if cfg.env.ideal_dist is not None else "fixed_ideal"
+        f"corpus_{pathlib.Path(cfg.env.ideal_corpus).stem}"
+        if cfg.env.ideal_corpus is not None
+        else cfg.env.ideal_dist if cfg.env.ideal_dist is not None else "fixed_ideal"
     )
     ideal_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", ideal_label).strip("_") or "ideal"
     ideal_label = ideal_label[:80]
     return (
-        f"{ideal_label}__seed_{int(cfg.training.hparam_eval_seed)}"
+        f"{ideal_label}__seed_{int(cfg.training.greedy_eval_seed)}"
         f"__n_{len(eval_seeds)}__{digest}"
     )
 
@@ -1019,6 +997,8 @@ def greedy_eval_corpus_cache_path(
 ) -> pathlib.Path | None:
     if not eval_seeds:
         return None
+    if getattr(cfg.training, "greedy_eval_corpus", None) is not None:
+        return pathlib.Path(cfg.training.greedy_eval_corpus)
     root = _greedy_eval_corpus_cache_root(cache_root)
     return root / f"{_greedy_eval_corpus_cache_key(cfg, eval_seeds)}.jsonl"
 
@@ -1057,7 +1037,12 @@ def resolve_greedy_eval_corpus(
     *,
     cache_root: str | pathlib.Path | None = None,
 ) -> tuple[list[dict], str | None, bool]:
-    """Loads a cached greedy-eval corpus when available, otherwise builds and saves it."""
+    """Load an explicit or cached corpus, generating only when no file is supplied."""
+    if not eval_seeds:
+        return [], None, False
+    if getattr(cfg.training, "greedy_eval_corpus", None) is not None:
+        corpus_rows = load_explicit_greedy_eval_corpus(cfg)
+        return corpus_rows, str(cfg.training.greedy_eval_corpus), False
     corpus_path = greedy_eval_corpus_cache_path(cfg, eval_seeds, cache_root=cache_root)
     if corpus_path is None:
         return [], None, False
@@ -1081,8 +1066,8 @@ def resolve_greedy_eval_corpus(
 def resolve_greedy_eval_targets(cfg) -> dict:
     """Resolves which greedy-eval envs to run from the explicit config toggles."""
     eval_enabled = (
-        cfg.training.hparam_eval_interval_steps > 0
-        and cfg.training.hparam_eval_num_examples > 0
+        cfg.training.greedy_eval_interval_steps > 0
+        and cfg.training.greedy_eval_num_examples > 0
     )
     if not eval_enabled:
         return {
@@ -1090,14 +1075,12 @@ def resolve_greedy_eval_targets(cfg) -> dict:
             "run_train_env": False,
             "run_nopq_env": False,
             "primary_target": None,
-            "nopq_gym_id": cfg.training.hparam_eval_nopq_gym_id,
+            "nopq_gym_id": _NOPQ_GYM_ID,
         }
 
-    run_train_env = bool(cfg.training.hparam_eval_on_train_env)
-    requested_run_nopq_env = bool(cfg.training.hparam_eval_on_nopq_env)
-    nopq_gym_id = cfg.training.hparam_eval_nopq_gym_id
-
-    nopq_matches_train_env = nopq_gym_id.lower() == cfg.env.gym_id.lower()
+    run_train_env = bool(cfg.training.greedy_eval_on_train_env)
+    requested_run_nopq_env = bool(cfg.training.greedy_eval_on_nopq_env)
+    nopq_matches_train_env = _NOPQ_GYM_ID.lower() == cfg.env.gym_id.lower()
     run_nopq_env = requested_run_nopq_env and not nopq_matches_train_env
     if run_train_env and run_nopq_env:
         primary_target = "nopq"
@@ -1111,7 +1094,7 @@ def resolve_greedy_eval_targets(cfg) -> dict:
         "run_train_env": run_train_env,
         "run_nopq_env": run_nopq_env,
         "primary_target": primary_target,
-        "nopq_gym_id": nopq_gym_id,
+        "nopq_gym_id": _NOPQ_GYM_ID,
     }
 
 

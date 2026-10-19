@@ -6,6 +6,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium.vector import AutoresetMode
 
+from .evaluation_corpus import training_policy_nvars
 from .training_utils import console_print
 
 
@@ -104,6 +105,7 @@ def build_env_kwargs_for_gym_id(cfg, gym_id: str) -> dict:
     """Builds env kwargs and drops unsupported options for NoPQ environments."""
     env_kwargs = {
         "ideal_dist": cfg.env.ideal_dist,
+        "ideal_corpus": cfg.env.ideal_corpus,
         "elimination": cfg.env.elimination,
         "rewards": cfg.env.rewards,
         "pq_strategy": cfg.env.priority_queue_strategy,
@@ -139,6 +141,7 @@ def build_fixed_ideal_env_kwargs_for_gym_id(cfg, gym_id: str, corpus_row: dict) 
         "coeff_ring": corpus_row["coeff_ring"],
         "symbols": corpus_row["symbols"],
         "basis_elements": corpus_row["basis_elements"],
+        "observation_nvars": training_policy_nvars(cfg),
     }
     if "nopq" not in gym_id.lower():
         env_kwargs["pq_strategy"] = cfg.env.priority_queue_strategy

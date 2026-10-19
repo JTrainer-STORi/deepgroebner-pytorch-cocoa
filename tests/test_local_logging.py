@@ -5,11 +5,13 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from deepgroebner_pytorch_cocoa.config_dataclasses import Config
 from deepgroebner_pytorch_cocoa.local_logging import SimpleRunWriter
+from deepgroebner_pytorch_cocoa import local_logging
 from deepgroebner_pytorch_cocoa import training_utils
 
 
@@ -120,7 +122,7 @@ def test_tracked_run_uses_same_id_and_output_root_for_wandb_and_local_logs(
         output_root /= group
     expected_metrics = {
         "performance/steps_per_second": 42.0,
-        "algorithm_policy/loss": 1.25,
+        "policy_function/loss": 1.25,
         "evaluation_greedy/selection_metric": -3.0,
     }
 
@@ -141,6 +143,7 @@ def test_tracked_run_uses_same_id_and_output_root_for_wandb_and_local_logs(
     assert init_kwargs["id"] == run_id
     assert init_kwargs["name"] == run_name
     assert init_kwargs["settings"].init_timeout == cfg.training.wandb_init_timeout
+    assert init_kwargs["settings"]._stats_buffer_size == 1
     assert Path(writer.log_dir).resolve() == output_root / "runs" / run_name
     if configured_output or group is not None:
         assert Path(init_kwargs["dir"]).resolve() == output_root
@@ -156,3 +159,74 @@ def test_tracked_run_uses_same_id_and_output_root_for_wandb_and_local_logs(
     assert {record["tag"]: record["value"] for record in records} == expected_metrics
     assert Path(writer.scalar_csv_path).is_file()
     assert asdict(cfg) == original_config
+
+
+def test_native_system_metrics_are_sampled_once_per_step_and_interval_then_flushed(
+    monkeypatch, tmp_path
+):
+    #arrange
+    adapter = Mock()
+    adapter.collect.side_effect = [
+        {"system_cpu/cpu": 20.0},
+        {"system_gpu/gpu_0_gpu": 75.0},
+        {"system_general/network_sent": 128.0},
+    ]
+    log_calls = []
+    wandb_module = SimpleNamespace(
+        run=object(), log=lambda values, step: log_calls.append((values, step))
+    )
+    clock = Mock(side_effect=[0.0, 0.0, 5.0, 10.0, 10.0, 10.0])
+    monkeypatch.setattr(local_logging.time, "monotonic", clock)
+    writer = SimpleRunWriter(
+        str(tmp_path / "run"),
+        mirror_to_wandb=True,
+        wandb_module=wandb_module,
+        system_metrics_adapter=adapter,
+        system_metrics_interval_seconds=10,
+    )
+
+    #act
+    writer.add_scalar("policy_function/loss", 1, 4)
+    writer.add_scalar("value_function/loss", 2, 4)
+    writer.add_scalar("policy_function/loss", 3, 8)
+    writer.add_scalar("policy_function/loss", 4, 12)
+    writer.add_scalar("value_function/loss", 5, 12)
+    writer.close()
+    writer.close()
+    records = [json.loads(line) for line in Path(writer.scalar_path).read_text().splitlines()]
+    with Path(writer.scalar_csv_path).open(newline="") as handle:
+        csv_records = list(csv.DictReader(handle))
+    system_records = [record for record in records if record["tag"].startswith("system_")]
+
+    #assert
+    assert adapter.collect.call_count == 3
+    assert [(record["tag"], record["value"], record["step"]) for record in system_records] == [
+        ("system_cpu/cpu", 20.0, 4),
+        ("system_gpu/gpu_0_gpu", 75.0, 12),
+        ("system_general/network_sent", 128.0, 12),
+    ]
+    assert log_calls == [({record["tag"]: record["value"]}, record["step"]) for record in records]
+    assert len(csv_records) == len(records)
+    assert writer._scalar_handle.closed
+    assert writer._scalar_csv_handle.closed
+
+
+@pytest.mark.parametrize("mirror,active", [(False, True), (True, False)])
+def test_system_metric_adapter_is_not_polled_without_an_active_tracked_run(
+    mirror, active, tmp_path
+):
+    #arrange
+    adapter = Mock()
+    writer = SimpleRunWriter(
+        str(tmp_path / "run"),
+        mirror_to_wandb=mirror,
+        wandb_module=SimpleNamespace(run=object() if active else None),
+        system_metrics_adapter=adapter,
+    )
+
+    #act
+    writer.add_scalar("policy_function/loss", 1, 4)
+    writer.close()
+
+    #assert
+    adapter.collect.assert_not_called()

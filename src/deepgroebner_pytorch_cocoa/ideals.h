@@ -41,12 +41,39 @@ namespace CoCoA
 
     virtual int nvars() const = 0;
 
+    virtual int corpus_index() const { return -1; }
+
     auto copy() const { return std::unique_ptr<IdealGenerator>(copy_deriv());}
 
   protected:
 
     virtual IdealGenerator* copy_deriv() const = 0;
 
+  };
+
+  class CorpusIdealGenerator : public IdealGenerator {
+  public:
+    explicit CorpusIdealGenerator(std::vector<ideal> ideals): ideals(std::move(ideals)) {
+      for (const auto& entry : this->ideals) {
+        const int count = NumIndets(RingOf(entry));
+        if (count > max_nvars) max_nvars = count;
+      }
+    }
+    ideal next() override {
+      std::uniform_int_distribution<size_t> select(0, ideals.size() - 1);
+      current_index = static_cast<int>(select(rng));
+      return ideals[current_index];
+    }
+    void seed(int value) override { rng.seed(value); }
+    int nvars() const override { return max_nvars; }
+    int corpus_index() const override { return current_index; }
+  protected:
+    CorpusIdealGenerator* copy_deriv() const override { return new CorpusIdealGenerator(*this); }
+  private:
+    std::vector<ideal> ideals;
+    int max_nvars = 0;
+    std::mt19937 rng;
+    int current_index = -1;
   };
 
   /**
@@ -61,11 +88,8 @@ namespace CoCoA
      * @param d Maximum degree of a monomial.
      * @param s Number of generators of each ideal.
      * @param dist Type of distribution on monomials.
-     * @param constants Whether to include constants as monomials.
-     * @param homogeneous Whether the binomials are homogeneous.
-     * @param pure Whether the binomials are pure.
      */
-    RandomBinomialIdealGenerator(int n = 3, int d = 20, int s = 10, DistributionType dist = DistributionType::Uniform, bool constants = false, bool homogeneous = false, bool pure = false);
+    RandomBinomialIdealGenerator(int n = 3, int d = 20, int s = 10, DistributionType dist = DistributionType::Uniform);
 
     ideal next() override;
 
@@ -81,8 +105,6 @@ namespace CoCoA
 
     int n;
     int s;
-    bool homogeneous;
-    bool pure;
     std::vector<std::vector<PPMonoidElem>> bases;
     std::mt19937 rng;
     std::discrete_distribution<int> degree_dist;
@@ -105,10 +127,7 @@ namespace CoCoA
       int d_max,
       int s_min,
       int s_max,
-      DistributionType dist = DistributionType::Uniform,
-      bool constants = false,
-      bool homogeneous = false,
-      bool pure = false
+      DistributionType dist = DistributionType::Uniform
     );
 
     ideal next() override;
@@ -139,9 +158,6 @@ namespace CoCoA
     int s_min;
     int s_max;
     DistributionType dist;
-    bool constants;
-    bool homogeneous;
-    bool pure;
     std::mt19937 rng;
     std::uniform_int_distribution<int> coeff_dist{1, 32003-1};
     std::map<std::pair<int, int>, PrecomputedNDData> precomputed_by_nd;

@@ -95,25 +95,80 @@ def test_current_actor_heads_emit_finite_counterfactual_gradient_and_attention_m
     writer = SimpleNamespace(add_scalar=lambda tag, value, step: metrics.update({tag: value}))
 
     #act
-    run_actor_global_diagnostics(actor, _inputs(), writer, 1, 10, diag_every=1, grad_every=1)
+    run_actor_global_diagnostics(
+        actor, _inputs(), writer, 1, 10, diag_every=1, grad_every=1, attention_every=1,
+    )
 
     #assert
     assert metrics
     assert all(np.isfinite(value) for value in metrics.values())
-    assert "algorithm_policy/diagnostic_pair_embed_sens" in metrics
+    assert "policy_function/diagnostic_pair_embed_sens" in metrics
     assert any(
-        key.startswith("algorithm_policy/diagnostic_attn_pair_embedding_head_")
+        key.startswith("policy_function/diagnostic_attn_pair_embedding_head_")
         for key in metrics
     )
-    assert all(key.startswith("algorithm_policy/diagnostic_") for key in metrics)
+    assert all(key.startswith("policy_function/diagnostic_") for key in metrics)
     if state_head:
-        assert "algorithm_policy/diagnostic_cf_state_zero_kl" in metrics
-        assert "algorithm_policy/diagnostic_state_grad_sens" in metrics
+        assert "policy_function/diagnostic_cf_state_zero_kl" in metrics
+        assert "policy_function/diagnostic_state_grad_sens" in metrics
     if feature_head:
-        assert "algorithm_policy/diagnostic_cf_state_feats_zero_kl" in metrics
-        assert "algorithm_policy/diagnostic_state_features_grad_sens" in metrics
+        assert "policy_function/diagnostic_cf_state_feats_zero_kl" in metrics
+        assert "policy_function/diagnostic_state_features_grad_sens" in metrics
     assert actor.training
     assert all(p.grad is None for p in actor.parameters())
+
+
+@pytest.mark.parametrize(
+    "update_idx,cf_every,attention_every,grad_every,expected_groups,attention_requests",
+    [
+        (1, 0, 0, 0, (False, False, False), []),
+        (1, 1, 0, 0, (True, False, False), [False]),
+        (1, 0, 1, 0, (False, True, False), [True]),
+        (1, 2, 3, 5, (False, False, False), []),
+        (2, 2, 3, 5, (True, False, False), [False]),
+        (3, 2, 3, 5, (False, True, False), [True]),
+        (5, 2, 3, 5, (False, False, True), [False]),
+        (6, 2, 3, 5, (True, True, False), [True]),
+        (10, 2, 3, 5, (True, False, True), [False, False]),
+        (15, 2, 3, 5, (False, True, True), [True, False]),
+        (30, 2, 3, 5, (True, True, True), [True, False]),
+        (1, 0, -1, 0, (False, False, False), []),
+    ],
+)
+def test_diagnostic_frequencies_are_independent_and_share_the_initial_forward_pass(
+    update_idx, cf_every, attention_every, grad_every, expected_groups, attention_requests,
+):
+    #arrange
+    actor = CombinedPolicyNetwork(_config(
+        ActorConfig, state_features_embedding_head="mlp",
+        pair_embedding_head="alphastar-buchberger-pair-transformer",
+    ))
+    inputs = _inputs()
+    records = {}
+    writer = SimpleNamespace(
+        add_scalar=lambda tag, value, step: records.update({tag: (value, step)})
+    )
+    forwards = []
+    actor.register_forward_pre_hook(
+        lambda module, args, kwargs: forwards.append(kwargs.get("return_attention", False)),
+        with_kwargs=True,
+    )
+
+    #act
+    run_actor_global_diagnostics(
+        actor, inputs, writer, update_idx, 123,
+        diag_every=cf_every, grad_every=grad_every, attention_every=attention_every,
+    )
+
+    #assert
+    assert forwards == attention_requests
+    cf_expected, attention_expected, gradients_expected = expected_groups
+    assert any("diagnostic_cf_" in tag for tag in records) == cf_expected
+    assert any("diagnostic_attn_" in tag for tag in records) == attention_expected
+    assert ("policy_function/diagnostic_pair_embed_sens" in records) == gradients_expected
+    assert all(np.isfinite(value) and step == 123 for value, step in records.values())
+    assert actor.training
+    assert all(parameter.grad is None for parameter in actor.parameters())
 
 
 @pytest.mark.parametrize("gym_id", ["BuchbergerExponents-v1", "BuchbergerExponentsNoPQ-v1"])

@@ -1,4 +1,4 @@
-"""Generate a fixed corpus of ideals for evaluation."""
+"""Generate ideal corpora for greedy evaluation or testing after training."""
 
 from deepgroebner_pytorch_cocoa.corpus_generation import main
 

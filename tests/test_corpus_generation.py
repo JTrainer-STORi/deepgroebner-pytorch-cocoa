@@ -1,4 +1,4 @@
-"""Generate reusable evaluation corpora through the installed package API."""
+"""Generate evaluation and test corpora through the installed package API."""
 
 from dataclasses import asdict, replace
 import json
@@ -26,8 +26,6 @@ def _fixed_config(**overrides):
         "examples": 1,
         "seed": 123,
         "elimination": "none",
-        "observation_budget": 8,
-        "top_monomials": 1,
     }
     values.update(overrides)
     return CorpusConfig(**values)
@@ -42,7 +40,7 @@ def test_fixed_corpus_api_returns_written_rows_from_another_directory(
 ):
     #arrange
     monkeypatch.chdir(tmp_path)
-    cfg = _fixed_config(output_path="corpora/fixed.jsonl")
+    cfg = _fixed_config(output_path="test_corpora/fixed.jsonl")
     original_config = asdict(cfg)
     expected_basis = [entry.replace(" ", "") for entry in FIXED_BASIS.split(",")]
 
@@ -52,7 +50,7 @@ def test_fixed_corpus_api_returns_written_rows_from_another_directory(
     #assert
     assert isinstance(result, CorpusGenerationResult)
     assert result.generated is True
-    assert result.corpus_path == str(tmp_path / "corpora" / "fixed.jsonl")
+    assert result.corpus_path == str(tmp_path / "test_corpora" / "fixed.jsonl")
     assert result.corpus_rows == _read_rows(result.corpus_path)
     assert len(result.corpus_rows) == 1
     row = result.corpus_rows[0]
@@ -64,6 +62,7 @@ def test_fixed_corpus_api_returns_written_rows_from_another_directory(
     assert [entry.replace(" ", "") for entry in row["basis_elements"]] == expected_basis
     assert asdict(cfg) == original_config
     assert Path.cwd() == tmp_path
+    assert not (tmp_path / "eval_corpora").exists()
 
 
 def test_geometric_corpus_api_uses_bundled_graphs_from_another_directory(
@@ -110,8 +109,6 @@ def test_corpus_cli_and_api_generate_identical_examples(
             examples=1,
             seed=123,
             elimination="none",
-            observation_budget=8,
-            top_monomials=1,
             output_path="api.jsonl",
         )
     )
@@ -120,8 +117,6 @@ def test_corpus_cli_and_api_generate_identical_examples(
         "--examples=1",
         "--seed=123",
         "--elimination=none",
-        "--observation-budget=8",
-        "--top-monomials=1",
         "--output-path=cli.jsonl",
     ]
     if distribution is None:
@@ -139,6 +134,24 @@ def test_corpus_cli_and_api_generate_identical_examples(
     assert cli_result.corpus_path == str(tmp_path / "cli.jsonl")
     assert api_result.corpus_rows == cli_result.corpus_rows
     assert cli_result.corpus_rows == _read_rows(cli_result.corpus_path)
+
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [
+        ("--priority-queue-strategy", "degree"),
+        ("--observation-budget", "8"),
+        ("--top-monomials", "1"),
+    ],
+)
+def test_corpus_cli_rejects_observation_options(flag, value, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as error:
+        main([flag, value])
+
+    assert error.value.code != 0
+    assert not (tmp_path / "eval_corpora").exists()
 
 
 def test_corpus_api_reuses_existing_cache(monkeypatch, tmp_path):

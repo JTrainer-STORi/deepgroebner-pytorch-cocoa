@@ -5,16 +5,25 @@ cdef extern from "buchberger.cpp" namespace "CoCoA":
     pass
 
 cdef extern from "buchberger.h" namespace "CoCoA":
+    cdef cppclass BuchbergerStats:
+        int zero_reductions
+        int nonzero_reductions
+        int polynomial_additions
+        double total_reward
+
     cdef cppclass NoPQEnv:
         NoPQEnv() except +
         NoPQEnv(string, string, string, bint, bint, bint, int, string) except +
         NoPQEnv(string, string, vector[string], string, string, bint, bint, int) except +
         NoPQEnv(const NoPQEnv&)
-        void reset()
+        void reset() except +
         double step(int)
         void set_seed(int)
-        double value(string, double)
+        double value(string, double) except +
+        BuchbergerStats heuristic_stats(string, int) except +
         bint is_groebner_basis() except +
+        void set_ideal_corpus(vector[string], vector[string], vector[vector[string]]) except +
+        int corpus_index()
 
         vector[int] state
         vector[int] G_leads
@@ -32,8 +41,11 @@ cdef extern from "buchberger.h" namespace "CoCoA":
         void reset()
         double step(int)
         void set_seed(int)
-        double value(string, double)
+        double value(string, double) except +
         bint is_groebner_basis() except +
+        vector[string] initial_ideal() except +
+        void set_ideal_corpus(vector[string], vector[string], vector[vector[string]]) except +
+        int corpus_index()
 
         vector[int] leads
         vector[int] G_padded

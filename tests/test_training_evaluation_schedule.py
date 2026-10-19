@@ -26,11 +26,21 @@ def _training_config(tmp_path, *, steps_per_update=4, updates=6):
     return cfg
 
 
-def test_disabled_evaluation_is_never_invoked(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "interval,num_examples,train,nopq",
+    [(1, 0, True, False), (0, 1, True, False), (-1, 1, True, False), (1, 1, False, False)],
+    ids=["no-examples", "zero-interval", "negative-interval", "no-targets"],
+)
+def test_disabled_evaluation_is_never_invoked(
+    tmp_path, monkeypatch, interval, num_examples, train, nopq
+):
     #arrange
     cfg = _training_config(tmp_path)
-    cfg.training.hparam_eval_interval_steps = 1
-    cfg.training.hparam_eval_num_examples = 0
+    cfg.training.greedy_eval_first_step = 0
+    cfg.training.greedy_eval_interval_steps = interval
+    cfg.training.greedy_eval_num_examples = num_examples
+    cfg.training.greedy_eval_on_train_env = train
+    cfg.training.greedy_eval_on_nopq_env = nopq
 
     def unexpected_evaluation(self, **kwargs):
         pytest.fail("Training invoked disabled evaluation")
@@ -46,25 +56,42 @@ def test_disabled_evaluation_is_never_invoked(tmp_path, monkeypatch):
     #assert
     assert result.summary["global_step"] == 24
     assert trainer.evaluation.next_step is None
+    assert result.summary["greedy_eval_first_step"] is None
 
 
 @pytest.mark.parametrize(
-    "interval,steps_per_update,updates,expected_schedule",
+    "first_step,interval,steps_per_update,updates,expected_schedule",
     [
-        (5, 4, 6, [(8, 5, 10), (12, 10, 15), (16, 15, 20), (20, 20, 25)]),
-        (3, 8, 3, [(8, 3, 9), (16, 9, 18), (24, 18, 27)]),
+        (None, 5, 4, 6, [(8, 5, 10), (12, 10, 15), (16, 15, 20), (20, 20, 25)]),
+        (None, 3, 8, 3, [(8, 3, 9), (16, 9, 18), (24, 18, 27)]),
+        (2, 5, 4, 5, [(4, 2, 7), (8, 7, 12), (12, 12, 17), (20, 17, 22)]),
+        (9, 5, 4, 6, [(12, 9, 14), (16, 14, 19), (20, 19, 24), (24, 24, 29)]),
+        (0, 5, 4, 4, [(0, 0, 5), (8, 5, 10), (12, 10, 15), (16, 15, 20)]),
+        (0, 3, 8, 2, [(0, 0, 3), (8, 3, 9), (16, 9, 18)]),
+        (100, 5, 4, 3, []),
+        (0, 5, 4, 0, [(0, 0, 5)]),
     ],
-    ids=["skip_updates_and_exact_boundary", "cross_multiple_intervals"],
+    ids=[
+        "default-first-step",
+        "cross-multiple-intervals",
+        "early-offset-without-drift",
+        "delayed-first-step",
+        "baseline-before-training",
+        "baseline-and-crossed-intervals",
+        "first-step-beyond-training",
+        "baseline-with-no-updates",
+    ],
 )
 def test_evaluation_runs_only_when_due_and_advances_schedule(
-    tmp_path, monkeypatch, interval, steps_per_update, updates, expected_schedule
+    tmp_path, monkeypatch, first_step, interval, steps_per_update, updates, expected_schedule
 ):
     #arrange
     cfg = _training_config(
         tmp_path, steps_per_update=steps_per_update, updates=updates
     )
-    cfg.training.hparam_eval_interval_steps = interval
-    cfg.training.hparam_eval_num_examples = 1
+    cfg.training.greedy_eval_first_step = first_step
+    cfg.training.greedy_eval_interval_steps = interval
+    cfg.training.greedy_eval_num_examples = 1
     monkeypatch.setattr(
         ppo_evaluation,
         "resolve_greedy_eval_corpus",
@@ -110,6 +137,31 @@ def test_evaluation_runs_only_when_due_and_advances_schedule(
 
     #assert
     assert observed_schedule == expected_schedule
-    assert trainer.evaluation.next_step == expected_schedule[-1][2]
+    resolved_first_step = interval if first_step is None else first_step
+    assert trainer.evaluation.next_step == (
+        expected_schedule[-1][2] if expected_schedule else resolved_first_step
+    )
     assert result.summary["policy_updates"] == updates
-    assert result.summary["greedy_eval_last_mean_return"] == 2.0
+    assert result.summary["greedy_eval_last_mean_return"] == (
+        2.0 if expected_schedule else None
+    )
+    assert result.summary["greedy_eval_first_step"] == resolved_first_step
+
+
+@pytest.mark.parametrize("first_step", [-1, -100])
+def test_negative_first_evaluation_timestep_is_rejected_before_setup(
+    first_step, tmp_path, monkeypatch
+):
+    #arrange
+    cfg = _training_config(tmp_path)
+    cfg.training.greedy_eval_first_step = first_step
+    monkeypatch.setattr(
+        ppo_training, "create_run_writer", lambda cfg: pytest.fail("Unexpected setup")
+    )
+
+    #act
+    #assert
+    with pytest.raises(ValueError, match="greedy_eval_first_step"):
+        ppo_training.train(cfg)
+    with pytest.raises(ValueError, match="greedy_eval_first_step"):
+        ppo_evaluation.TrainingEvaluation(cfg)

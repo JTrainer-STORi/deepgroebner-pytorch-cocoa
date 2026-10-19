@@ -13,7 +13,8 @@ Upstream work is associated with:
 - Michael Stillman
 - Daniel Halpern-Leistner
 
-This repository contains substantial downstream modifications, including packaging changes, a simplified public-facing interface, and additional implementation work developed in this repository.
+This repository contains substantial downstream modifications, including packaging changes, PyTorch instead of TensorFlow for the machine learning interface, a more versatile implementation of Buchberger in C++ utilizing CoCoALib for symboic algebra objects and functions, a more recent implementation of PPO with modifications like Popart value normalization, an expanded number of neural networks for working on this problem including attention-based and state conditioned neural networks, additional tutorials and more.
+
 
 This repository is distributed under the GNU General Public License v3.0. See [LICENSE](LICENSE).
 

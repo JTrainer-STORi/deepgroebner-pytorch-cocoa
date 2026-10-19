@@ -56,6 +56,11 @@ class TrainingEvaluation:
 
     def __init__(self, cfg):
         self.cfg = cfg
+        if (
+            cfg.training.greedy_eval_first_step is not None
+            and cfg.training.greedy_eval_first_step < 0
+        ):
+            raise ValueError("training.greedy_eval_first_step must be nonnegative or None.")
         greedy_eval_plan = resolve_greedy_eval_targets(cfg)
         self.enabled = greedy_eval_plan["enabled"]
         self.run_train_env = greedy_eval_plan["run_train_env"]
@@ -105,9 +110,11 @@ class TrainingEvaluation:
                 console_print(
                     cfg, f"Loaded greedy eval corpus from {self.corpus_path}"
                 )
-        self.next_step = (
-            cfg.training.hparam_eval_interval_steps if self.enabled else None
-        )
+        first_step = cfg.training.greedy_eval_first_step
+        if first_step is None:
+            first_step = cfg.training.greedy_eval_interval_steps
+        self.first_step = first_step if self.enabled else None
+        self.next_step = self.first_step
         self.last = None
         self.last_train = None
         self.last_nopq = None
@@ -248,5 +255,7 @@ class TrainingEvaluation:
                 flush=True,
             )
 
-        while self.next_step is not None and self.next_step <= global_step:
-            self.next_step += cfg.training.hparam_eval_interval_steps
+        if self.next_step is not None and self.next_step <= global_step:
+            interval = cfg.training.greedy_eval_interval_steps
+            intervals_elapsed = (global_step - self.next_step) // interval + 1
+            self.next_step += intervals_elapsed * interval

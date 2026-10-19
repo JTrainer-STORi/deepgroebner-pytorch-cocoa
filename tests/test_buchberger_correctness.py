@@ -16,7 +16,7 @@ import deepgroebner_pytorch_cocoa  # noqa: F401: registers the Gym environments
 
 ENVIRONMENTS = ["BuchbergerExponents-v1", "BuchbergerExponentsNoPQ-v1"]
 ELIMINATIONS = ["none", "lcm", "gebauermoeller"]
-SELECTORS = ["first", "last", "degree", "normal", "sugar", "random"]
+SELECTORS = ["first", "degree", "normal", "sugar", "random"]
 SORTING = [(False, False), (False, True), (True, False), (True, True)]
 NON_GROEBNER_BASIS = ["x^2-y", "x*y-1"]
 SYSTEMS = [
@@ -62,6 +62,35 @@ def _finish_episode(env, obs, action_order="first"):
         if terminated:
             return obs, rewards
     pytest.fail("Small deterministic ideal did not terminate within 300 steps")
+
+
+@pytest.mark.parametrize("fixed", [True, False], ids=["fixed-ideal", "generated-ideal"])
+def test_removed_last_priority_queue_strategy_is_rejected(fixed):
+    #arrange
+    kwargs = (
+        dict(coeff_ring="QQ", symbols="x,y", basis_elements=NON_GROEBNER_BASIS)
+        if fixed else dict(ideal_dist="2-3-3-weighted")
+    )
+
+    #act
+    #assert
+    with pytest.raises(IndexError):
+        with _environment("BuchbergerExponents-v1", pq_strategy="last", **kwargs):
+            pytest.fail("Removed priority queue strategy was accepted")
+
+
+@pytest.mark.parametrize("gym_id", ENVIRONMENTS)
+def test_removed_last_heuristic_raises_a_python_exception(gym_id):
+    #arrange
+    with _environment(
+        gym_id, coeff_ring="QQ", symbols="x,y", basis_elements=NON_GROEBNER_BASIS,
+    ) as env:
+        env.reset(seed=81)
+
+        #act
+        #assert
+        with pytest.raises(IndexError):
+            env.unwrapped.value(strategy="last")
 
 
 @pytest.mark.parametrize("gym_id", ENVIRONMENTS)

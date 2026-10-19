@@ -55,7 +55,7 @@ def _scalar_elapsed_times(trainer):
     return [
         (record["step"], record["value"])
         for record in _read_jsonl(trainer.writer.scalar_path)
-        if record["tag"] == "performance/elapsed_seconds"
+        if record["tag"] == "system_general/elapsed_seconds"
     ]
 
 
@@ -238,7 +238,7 @@ def test_cpu_utilization_uses_sample_deltas(tmp_path, wall_times, cpu_times, exp
     assert records == [first, second]
 
 
-def test_system_scalars_route_to_hardware_performance_and_environment_sections(tmp_path):
+def test_system_scalars_route_to_hardware_general_queue_and_rollout_sections(tmp_path):
     #arrange
     sample = {
         "timestamp_utc": "2026-10-15T12:00:00Z",
@@ -257,7 +257,16 @@ def test_system_scalars_route_to_hardware_performance_and_environment_sections(t
         "cuda_memory_allocated_bytes": 2 ** 30,
         "cuda_memory_allocated_gib": 1.0,
         "cuda_max_memory_reserved_gib": 4.0,
+        "disk_read_mib": 3.5,
+        "network_sent_mib": 1.5,
+        "nonfinite_counter": float("inf"),
+        "rollout_num_states": 8.0,
+        "rollout_basis_count_mean": 6.0,
+        "rollout_steps_since_basis_update_mean": 2.0,
         "rollout_pair_count_mean": 12.0,
+        "rollout_pairs_processed_max": 9.0,
+        "rollout_pair_overflow_mean": 4.0,
+        "rollout_pq_budget": 8.0,
         "rollout_pq_binding_ever": False,
     }
     writer = SimpleRunWriter(str(tmp_path / "run"))
@@ -273,7 +282,7 @@ def test_system_scalars_route_to_hardware_performance_and_environment_sections(t
     #assert
     assert {record["step"] for record in records} == {4}
     assert {record["tag"]: record["value"] for record in records} == {
-        "performance/elapsed_seconds": 10.0,
+        "system_general/elapsed_seconds": 10.0,
         "system_cpu/process_total_seconds": 3.0,
         "system_cpu/process_utilization_percent": 30.0,
         "system_memory/process_rss_gib": 1.0,
@@ -281,6 +290,14 @@ def test_system_scalars_route_to_hardware_performance_and_environment_sections(t
         "system_gpu/cuda_enabled": 1.0,
         "system_gpu/memory_allocated_gib": 1.0,
         "system_gpu/peak_memory_reserved_gib": 4.0,
-        "evaluation_training/rollout_pair_count_mean": 12.0,
-        "evaluation_training/rollout_pq_binding_ever": 0.0,
+        "system_general/disk_read_mib": 3.5,
+        "system_general/network_sent_mib": 1.5,
+        "training_rollouts/rollout_num_states": 8.0,
+        "training_rollouts/rollout_basis_count_mean": 6.0,
+        "training_rollouts/rollout_steps_since_basis_update_mean": 2.0,
+        "priority_queue/rollout_pair_count_mean": 12.0,
+        "priority_queue/rollout_pairs_processed_max": 9.0,
+        "priority_queue/rollout_pair_overflow_mean": 4.0,
+        "priority_queue/rollout_pq_budget": 8.0,
+        "priority_queue/rollout_pq_binding_ever": 0.0,
     }

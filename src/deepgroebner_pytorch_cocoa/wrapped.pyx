@@ -7,7 +7,7 @@ from os import fsencode
 from libcpp.vector cimport vector
 from libcpp.string cimport string
 
-from .buchberger cimport NoPQEnv, GLeadMonomialsEnv
+from .buchberger cimport BuchbergerStats, NoPQEnv, GLeadMonomialsEnv
 from .package_resources import laman_graph_directory
 
 cdef class CNoPQEnv:
@@ -36,6 +36,21 @@ cdef class CNoPQEnv:
             graph_directory_cpp = fsencode(laman_graph_directory())
             self.c_env = NoPQEnv(ideal_dist_cpp, elimination_cpp, rewards_cpp, <bint>sort_input, <bint>sort_reducers, <bint>fix_ideal, <int>k, graph_directory_cpp)
 
+    def set_ideal_corpus(self, coeff_ring, symbols, bases):
+        cdef vector[vector[string]] corpus_cpp = [[p.encode() for p in basis] for basis in bases]
+        cdef vector[string] coeff_rings_cpp
+        cdef vector[string] symbols_cpp
+        if isinstance(coeff_ring, str):
+            coeff_ring = [coeff_ring] * len(bases)
+        if isinstance(symbols, str):
+            symbols = [symbols] * len(bases)
+        coeff_rings_cpp = [value.encode() for value in coeff_ring]
+        symbols_cpp = [value.encode() for value in symbols]
+        self.c_env.set_ideal_corpus(coeff_rings_cpp, symbols_cpp, corpus_cpp)
+
+    def corpus_index(self):
+        return self.c_env.corpus_index()
+
     def reset(self):
         self.c_env.reset()
         P = np.array(self.c_env.state, dtype=np.int32).reshape(-1, self.c_env.cols)
@@ -63,6 +78,17 @@ cdef class CNoPQEnv:
 
     def value(self, strategy='degree', gamma=0.99):
         return self.c_env.value(strategy.encode(), gamma)
+
+    def heuristic_stats(self, strategy='degree', int seed=0):
+        """Return full-pair-set heuristic costs without changing this environment."""
+        cdef BuchbergerStats stats = self.c_env.heuristic_stats(strategy.encode(), seed)
+        return {
+            "polynomial_additions": stats.polynomial_additions,
+            "reductions": stats.zero_reductions + stats.nonzero_reductions,
+            "zero_reductions": stats.zero_reductions,
+            "nonzero_reductions": stats.nonzero_reductions,
+            "reward_return": stats.total_reward,
+        }
 
     def is_groebner_basis(self):
         """Check the actual current basis against CoCoALib for the reset ideal.
@@ -234,6 +260,30 @@ cdef class CGLeadMonomialsEnv:
             "P_sugar": self._P_sugar_buf.copy(),
             "P_normal_rank": self._P_normal_rank_buf.copy(),
             "basis_elements": [s.decode("utf-8") for s in self.c_env.basis_elements],
+        }
+
+    def set_ideal_corpus(self, coeff_ring, symbols, bases):
+        cdef vector[vector[string]] corpus_cpp = [[p.encode() for p in basis] for basis in bases]
+        cdef vector[string] coeff_rings_cpp
+        cdef vector[string] symbols_cpp
+        if isinstance(coeff_ring, str):
+            coeff_ring = [coeff_ring] * len(bases)
+        if isinstance(symbols, str):
+            symbols = [symbols] * len(bases)
+        coeff_rings_cpp = [value.encode() for value in coeff_ring]
+        symbols_cpp = [value.encode() for value in symbols]
+        self.c_env.set_ideal_corpus(coeff_rings_cpp, symbols_cpp, corpus_cpp)
+
+    def corpus_index(self):
+        return self.c_env.corpus_index()
+
+    def initial_ideal(self):
+        """Return the ring and original generators from the latest reset."""
+        cdef vector[string] snapshot = self.c_env.initial_ideal()
+        return {
+            "coeff_ring": snapshot[0].decode("utf-8"),
+            "symbols": snapshot[1].decode("utf-8"),
+            "basis_elements": [snapshot[i].decode("utf-8") for i in range(2, snapshot.size())],
         }
 
     def reset(self):

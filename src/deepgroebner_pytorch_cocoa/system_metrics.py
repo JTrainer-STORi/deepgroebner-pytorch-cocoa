@@ -1,11 +1,15 @@
 """Functions for monitoring and logging system metrics during training"""
 
+import hashlib
 import json
+import logging
 import math
 import os
+import re
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +18,7 @@ import torch
 
 
 _BYTES_PER_GIB = float(1024 ** 3)
+_LOGGER = logging.getLogger(__name__)
 _STATUS_FIELDS_KIB = {
     "VmRSS": "rss_bytes",
     "VmHWM": "rss_hwm_bytes",
@@ -25,6 +30,101 @@ STATE_FEATURE_G_CARDINALITY_IDX = 0
 STATE_FEATURE_P_CARDINALITY_IDX = 1
 STATE_FEATURE_N_PAIRS_PROCESSED_IDX = 12
 STATE_FEATURE_STEPS_SINCE_BASIS_UPDATE_IDX = 13
+
+
+def _wandb_system_metric_tag(raw_name: str) -> str:
+    """Give SDK metrics one history section while retaining their device/path names."""
+    name = raw_name.removeprefix("system.").removeprefix("system/")
+    components = re.split(r"[./_]", name.lower())
+    if components[0] == "gpu":
+        section = "system_gpu"
+    elif components[0] == "cpu" or components[:2] == ["proc", "cpu"]:
+        section = "system_cpu"
+    elif components[0] in {"memory", "swap"} or components[:2] == ["proc", "memory"]:
+        section = "system_memory"
+    else:
+        section = "system_general"
+    leaf = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_") or "metric"
+    return f"{section}/{leaf}"
+
+
+class WandbSystemMetricsAdapter:
+    """Mirror fresh SDK system samples into ordinary namespaced history metrics.
+
+    Enable ``wandb.Settings(x_stats_buffer_size=...)`` before creating the run.
+    W&B exposes these samples through ``run._system_metrics``; that SDK hook is
+    internal, so access failures leave training and native telemetry running.
+    Native System charts remain available because their stream cannot be renamed.
+    Call ``collect`` while the run is active, including once before closing it.
+    """
+
+    def __init__(self, run):
+        self.run = run
+        self._last_timestamps: dict[str, float] = {}
+        self._metric_tags: dict[str, str] = {}
+        self._tag_owners: dict[str, str] = {}
+        self._warned_failure = False
+
+    def _metric_tag(self, raw_name: str) -> str:
+        if raw_name in self._metric_tags:
+            return self._metric_tags[raw_name]
+        base_tag = _wandb_system_metric_tag(raw_name)
+        tag = base_tag
+        if tag in self._tag_owners:
+            suffix = hashlib.sha256(raw_name.encode("utf-8")).hexdigest()[:8]
+            tag = f"{base_tag}_{suffix}"
+            counter = 1
+            while tag in self._tag_owners:
+                tag = f"{base_tag}_{suffix}_{counter}"
+                counter += 1
+        self._metric_tags[raw_name] = tag
+        self._tag_owners[tag] = raw_name
+        return tag
+
+    def collect(self) -> dict[str, float]:
+        """Return each metric's latest finite sample, once per SDK timestamp."""
+        try:
+            buffered_metrics = self.run._system_metrics
+        except Exception:
+            if not self._warned_failure:
+                _LOGGER.warning(
+                    "Cannot read W&B's system metric buffer; namespaced copies are "
+                    "unavailable, while W&B's native system collection remains enabled."
+                )
+                self._warned_failure = True
+            return {}
+        if not isinstance(buffered_metrics, Mapping):
+            return {}
+
+        metrics = {}
+        raw_names = sorted(
+            name for name in buffered_metrics if isinstance(name, str) and name
+        )
+        for raw_name in raw_names:
+            samples = buffered_metrics[raw_name]
+            if not isinstance(samples, Sequence) or isinstance(samples, (str, bytes)):
+                continue
+            newest_timestamp = self._last_timestamps.get(raw_name, -math.inf)
+            newest_value = None
+            for sample in samples:
+                if not isinstance(sample, (tuple, list)) or len(sample) != 2:
+                    continue
+                timestamp, value = sample
+                if isinstance(timestamp, datetime):
+                    timestamp = timestamp.timestamp()
+                if not isinstance(timestamp, Real) or not isinstance(value, Real):
+                    continue
+                timestamp, value = float(timestamp), float(value)
+                if (
+                    math.isfinite(timestamp)
+                    and math.isfinite(value)
+                    and timestamp > newest_timestamp
+                ):
+                    newest_timestamp, newest_value = timestamp, value
+            if newest_value is not None:
+                metrics[self._metric_tag(raw_name)] = newest_value
+                self._last_timestamps[raw_name] = newest_timestamp
+        return metrics
 
 
 def _bytes_to_gib(value: int | float | None) -> float | None:

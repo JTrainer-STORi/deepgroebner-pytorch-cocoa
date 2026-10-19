@@ -6,11 +6,16 @@ import sys
 import pytest
 
 import evaluate_model
+import evaluate_heuristics
 import generate_corpus
 import run_training
 from deepgroebner_pytorch_cocoa.config_dataclasses import Config
+from deepgroebner_pytorch_cocoa.evaluation_resources import (
+    RESOURCE_FIELDS,
+    RESOURCE_STATISTIC_FIELDS,
+)
 from deepgroebner_pytorch_cocoa.model_evaluation import (
-    EvalCorpusConfig,
+    TestCorpusConfig as CorpusTestConfig,
     EvaluationResult,
     evaluate,
 )
@@ -68,8 +73,16 @@ def test_training_script_passes_nested_options_to_trainer(monkeypatch, pair_head
         "--training.total-timesteps=64",
         "--training.track=True",
         "--training.normalize-observation-state-features=False",
-        "--training.hparam-eval-on-nopq-env=True",
+        "--training.greedy-eval-on-nopq-env=True",
+        "--training.greedy-eval-first-step=12000",
+        "--training.greedy-eval-interval-steps=4000",
+        "--training.greedy-eval-num-examples=20",
+        "--training.greedy-eval-corpus=/tmp/shared_evaluation.jsonl",
+        "--training.greedy-eval-seed=100",
+        "--training.greedy-eval-progress-interval-seconds=5",
+        "--training.greedy-eval-max-episode-seconds=60",
         "--training.counterfactual-diagnostic-frequency=5",
+        "--training.attention-diagnostic-frequency=2",
         "--training.output-directory=/tmp/path with spaces",
     ]
 
@@ -96,8 +109,16 @@ def test_training_script_passes_nested_options_to_trainer(monkeypatch, pair_head
     assert cfg.training.total_timesteps == 64
     assert cfg.training.track is True
     assert cfg.training.normalize_observation_state_features is False
-    assert cfg.training.hparam_eval_on_nopq_env is True
+    assert cfg.training.greedy_eval_on_nopq_env is True
+    assert cfg.training.greedy_eval_first_step == 12000
+    assert cfg.training.greedy_eval_interval_steps == 4000
+    assert cfg.training.greedy_eval_num_examples == 20
+    assert cfg.training.greedy_eval_corpus == "/tmp/shared_evaluation.jsonl"
+    assert cfg.training.greedy_eval_seed == 100
+    assert cfg.training.greedy_eval_progress_interval_seconds == 5
+    assert cfg.training.greedy_eval_max_episode_seconds == 60
     assert cfg.training.counterfactual_diagnostic_frequency == 5
+    assert cfg.training.attention_diagnostic_frequency == 2
     assert cfg.training.output_directory == "/tmp/path with spaces"
     assert cfg.actor.pair_embedding_head_in_dim is None
     assert cfg.training.batch_size is None
@@ -127,10 +148,37 @@ def test_training_script_reads_process_arguments(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "option",
+    [
+        "--env.priority-queue-strategy=last",
+        "--training.hparam-eval-interval-steps=4",
+        "--training.greedy-eval-nopq-gym-id=BuchbergerExponentsNoPQ-v1",
+        "--training.greedy-eval-max-pairs-processed-multiplier=5",
+        "--training.greedy-eval-max-pairs-processed-slack=0",
+        "--training.greedy-eval-nopq-benchmark-pairs-processed-multiplier=5",
+        "--training.greedy-eval-nopq-benchmark-pairs-processed-slack=50",
+        "--training.greedy-eval-max-steps-since-basis-update=100",
+    ],
+)
+def test_training_script_rejects_retired_options(option, monkeypatch):
+    #arrange
+    monkeypatch.setattr(
+        run_training, "train", lambda cfg: pytest.fail("Unexpected training")
+    )
+
+    #act
+    #assert
+    with pytest.raises(SystemExit) as error:
+        run_training.main([option])
+    assert error.value.code != 0
+
+
+@pytest.mark.parametrize(
     "script,option",
     [
         (run_training, "--training.total-timesteps"),
         (evaluate_model, "--model-name"),
+        (evaluate_heuristics, "--corpus"),
         (generate_corpus, "--examples"),
     ],
 )
@@ -151,7 +199,7 @@ def test_scripts_generate_train_and_evaluate_a_fixed_ideal(tmp_path, monkeypatch
     #arrange
     basis = "x^2 - y,x*y - 1,y^2 - x"
     expected_basis = [entry.replace(" ", "") for entry in basis.split(",")]
-    corpus_path = tmp_path / "corpus.jsonl"
+    corpus_path = tmp_path / "test_corpora" / "ideals.jsonl"
     corpus_args = [
         "--ideal-distribution=None",
         "--coeff-ring=QQ",
@@ -188,7 +236,7 @@ def test_scripts_generate_train_and_evaluate_a_fixed_ideal(tmp_path, monkeypatch
         "--training.total-timesteps=4",
         "--training.num-epochs-per-update=1",
         "--training.num-minibatches=2",
-        "--training.hparam-eval-num-examples=0",
+        "--training.greedy-eval-num-examples=0",
         "--training.cuda=False",
         "--training.track=False",
         "--training.pytorch-num-threads=1",
@@ -240,7 +288,7 @@ def test_scripts_generate_train_and_evaluate_a_fixed_ideal(tmp_path, monkeypatch
 
         #arrange
         api_output = tmp_path / "api" / gym_id
-        api_cfg = EvalCorpusConfig(
+        api_cfg = CorpusTestConfig(
             corpus=str(corpus_path),
             model_name=str(actor_path),
             gym_id=gym_id,
@@ -255,8 +303,17 @@ def test_scripts_generate_train_and_evaluate_a_fixed_ideal(tmp_path, monkeypatch
 
         #assert
         assert isinstance(api_result, EvaluationResult)
-        assert api_result.summary == cli_result.summary == summary
-        assert api_result.episode_results == cli_result.episode_results == episodes
+        # Timing and process memory vary across the separate CLI and API runs.
+        resource_keys = {*RESOURCE_FIELDS, *RESOURCE_STATISTIC_FIELDS, "resources"}
+        deterministic = lambda record: {key: value for key, value in record.items() if key not in resource_keys}
+        assert deterministic(api_result.summary) == deterministic(summary)
+        assert cli_result.summary == summary
+        assert [deterministic(row) for row in api_result.episode_results] == [
+            deterministic(row) for row in episodes
+        ]
+        assert cli_result.episode_results == episodes
+        assert api_summary["resources"]["elapsed_seconds"] >= 0
+        assert api_summary["resources"]["cpu_seconds"] >= 0
         assert api_result.output_directory == str(api_output.resolve())
         assert set(api_result.artifact_paths) == {
             "episode_results_csv",
@@ -265,4 +322,4 @@ def test_scripts_generate_train_and_evaluate_a_fixed_ideal(tmp_path, monkeypatch
             "metadata",
         }
         assert all(Path(path).is_file() for path in api_result.artifact_paths.values())
-        assert api_summary == summary
+        assert api_summary == api_result.summary

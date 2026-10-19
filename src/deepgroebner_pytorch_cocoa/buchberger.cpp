@@ -88,7 +88,6 @@ namespace CoCoA {
 
   static const std::map<std::string, SelectionType> strategy_map = {
     {"first",  SelectionType::First},
-    {"last",   SelectionType::Last},
     {"degree", SelectionType::Degree},
     {"normal", SelectionType::Normal},
     {"sugar",  SelectionType::Sugar},
@@ -282,13 +281,6 @@ namespace CoCoA {
       case SelectionType::First:
           out.cmp = [](const SPair &p1, const SPair &p2) {
               return std::tie(p1.j, p1.i) < std::tie(p2.j, p2.i);
-          };
-          break;
-
-        case SelectionType::Last:
-          // Inverse of First: prioritize most recently added pairs (larger j, then i).
-          out.cmp = [](const SPair &p1, const SPair &p2) {
-            return std::tie(p1.j, p1.i) > std::tie(p2.j, p2.i);
           };
           break;
 
@@ -866,6 +858,120 @@ void update(std::vector<RingElem>& G,
       return *this;
   }
 
+  void BuchbergerEnv::set_ideal_corpus(
+      const std::vector<std::string>& coeff_rings,
+      const std::vector<std::string>& symbols_strs,
+      const std::vector<std::vector<std::string>>& bases) {
+    if (bases.empty()) throw std::invalid_argument("Ideal corpus must be non-empty");
+    if (coeff_rings.size() != bases.size() || symbols_strs.size() != bases.size()) {
+      throw std::invalid_argument("Ideal corpus requires one coeff_ring and symbols entry per ideal");
+    }
+    // Keep arithmetic within each row's ring, while reusing identical rings.
+    std::map<std::pair<std::string, std::string>, SparsePolyRing> rings;
+    const int observation_nvars = nvars();
+    int max_nvars = 0;
+    std::vector<ideal> ideals;
+    ideals.reserve(bases.size());
+    for (size_t index = 0; index < bases.size(); ++index) {
+      const std::string prefix = "Corpus ideal " + std::to_string(index) + ": ";
+      if (bases[index].empty()) throw std::invalid_argument(prefix + "empty basis_elements");
+      const auto descriptor = std::make_pair(coeff_rings[index], symbols_strs[index]);
+      auto ring_entry = rings.find(descriptor);
+      if (ring_entry == rings.end()) {
+        try {
+          ring_entry = rings.emplace(descriptor, NewPolyRing(
+              parse_coeff_ring(coeff_rings[index]), symbols(symbols_strs[index]))).first;
+        } catch (...) {
+          throw std::invalid_argument(prefix + "invalid ring: " + coeff_rings[index] +
+                                      "[" + symbols_strs[index] + "]");
+        }
+      }
+      const SparsePolyRing& ring = ring_entry->second;
+      const int row_nvars = NumIndets(ring);
+      if (row_nvars > observation_nvars) {
+        throw std::invalid_argument(prefix + "variable count exceeds the environment's observation width");
+      }
+      max_nvars = std::max(max_nvars, row_nvars);
+      std::vector<RingElem> generators;
+      for (const auto& polynomial : bases[index]) {
+        try {
+          generators.emplace_back(ring, polynomial);
+        } catch (...) {
+          throw std::invalid_argument(prefix + "invalid polynomial in its ring: " + polynomial);
+        }
+        if (IsZero(generators.back())) {
+          throw std::invalid_argument(prefix + "zero polynomial generators are unsupported");
+        }
+      }
+      // Validate that every selectable ideal has an initial action. Otherwise
+      // a finite corpus could reset forever or give the policy an empty mask.
+      auto ordered = generators;
+      if (sort_input) {
+        std::sort(ordered.begin(), ordered.end(),
+                  [](ConstRefRingElem left, ConstRefRingElem right) { return LPP(left) < LPP(right); });
+      }
+      std::vector<RingElem> trial_basis;
+      std::vector<PPMonoidElem> trial_leads;
+      std::vector<int> trial_degrees, trial_sugars;
+      std::vector<SPair> trial_pairs;
+      for (ConstRefRingElem polynomial : ordered) trial_sugars.push_back(deg(polynomial));
+      for (ConstRefRingElem polynomial : ordered) {
+        update(trial_basis, trial_leads, trial_degrees, trial_sugars, trial_pairs, polynomial, elimination);
+      }
+      if (trial_pairs.empty()) {
+        throw std::invalid_argument(prefix + "no initial S-pairs after elimination; "
+                                    "training requires at least one valid action per ideal");
+      }
+      ideals.emplace_back(generators);
+    }
+    if (max_nvars != observation_nvars) {
+      throw std::invalid_argument("Ideal corpus maximum variable count must match the environment's observation width");
+    }
+    ideal_gen = std::make_unique<CorpusIdealGenerator>(std::move(ideals));
+    fixed_nvars = 0;
+    cached_ideal.reset();
+    fix_ideal = false;
+  }
+
+
+  std::vector<std::string> BuchbergerEnv::initial_ideal() const {
+    if (input_generators.empty()) {
+      throw std::invalid_argument("Call reset() before requesting the initial ideal");
+    }
+
+    const ring P = owner(input_generators.front());
+    const ring coeff = CoeffRing(P);
+    std::string coeff_ring;
+    if (IsQQ(coeff)) {
+      coeff_ring = "QQ";
+    } else if (IsZZ(coeff)) {
+      coeff_ring = "ZZ";
+    } else {
+      std::ostringstream coeff_stream;
+      coeff_stream << "ZZmod(" << characteristic(coeff) << ')';
+      coeff_ring = coeff_stream.str();
+    }
+
+    std::ostringstream symbols_stream;
+    const std::vector<symbol> indet_symbols = symbols(P);
+    for (size_t i = 0; i < indet_symbols.size(); ++i) {
+      if (i > 0) symbols_stream << ',';
+      symbols_stream << indet_symbols[i];
+    }
+
+    std::vector<std::string> result;
+    result.reserve(input_generators.size() + 2);
+    result.push_back(coeff_ring);
+    result.push_back(symbols_stream.str());
+    for (ConstRefRingElem generator : input_generators) {
+      std::ostringstream generator_stream;
+      generator_stream << generator;
+      result.push_back(generator_stream.str());
+    }
+    return result;
+  }
+
+
   void BuchbergerEnv::reset() {
     std::vector<RingElem> F;
 
@@ -1032,10 +1138,21 @@ void update(std::vector<RingElem>& G,
       return stats.discounted_return;
   }
 
+  BuchbergerStats BuchbergerEnv::heuristic_stats(std::string strategy, int seed) const {
+      if (input_generators.empty()) {
+        throw std::logic_error("Call reset before evaluating a heuristic");
+      }
+      return buchberger(G, LM, degLM, Sugars, P, strategy_map.at(strategy),
+                        elimination, rewards, sort_reducers, 1.0, seed).second;
+  }
+
     std::vector<long> lead_monomials_vector(ConstRefRingElem f, long k, long n_target) {
       std::vector<long> lead;
       const long n_ring = NumIndets(owner(f));
       const long n_cols = (n_target > 0) ? n_target : n_ring;
+      if (n_cols < n_ring) {
+        throw std::invalid_argument("Observation width must include every polynomial variable");
+      }
       SparsePolyIter it = BeginIter(f); // it points to the first term in f
       for (int j{0}; j < std::min(k, NumTerms(f)); j++) {
           std::vector<long> expv; // a vector of long ints

@@ -93,10 +93,11 @@ def build_training_summary(
             int(len(evaluation.corpus_rows)) if evaluation.enabled else 0
         ),
         "greedy_eval_interval_steps": (
-            int(cfg.training.hparam_eval_interval_steps) if evaluation.enabled else 0
+            int(cfg.training.greedy_eval_interval_steps) if evaluation.enabled else 0
         ),
+        "greedy_eval_first_step": evaluation.first_step,
         "greedy_eval_seed": (
-            int(cfg.training.hparam_eval_seed) if evaluation.enabled else None
+            int(cfg.training.greedy_eval_seed) if evaluation.enabled else None
         ),
         "greedy_eval_corpus_path": evaluation.corpus_path,
         "greedy_eval_last_selection_metric": (
